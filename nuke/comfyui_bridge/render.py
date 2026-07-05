@@ -15,9 +15,87 @@ from __future__ import annotations
 import io
 import os
 import tempfile
+import threading
+import time
 from typing import Any, Optional, Tuple
 
 from . import napi
+
+
+_CACHE_LOCK = threading.RLock()
+_CACHE: dict[tuple, tuple[float, bytes, int, int]] = {}
+_CACHE_TTL_SECONDS = 300.0
+_CACHE_MAX_ENTRIES = 24
+
+
+def clear_cache() -> None:
+    """Clear all cached frame exports."""
+    with _CACHE_LOCK:
+        _CACHE.clear()
+
+
+def clear_cache_from_node(bridge_node: Any = None) -> None:
+    """PyScript_Knob entrypoint: clear cached frame exports."""
+    clear_cache()
+    if bridge_node is not None:
+        try:
+            napi.set_knob_value(bridge_node, "status", "frame cache cleared")
+        except Exception:
+            pass
+
+
+def _cache_get(key: tuple) -> Optional[Tuple[bytes, int, int]]:
+    now = time.time()
+    with _CACHE_LOCK:
+        entry = _CACHE.get(key)
+        if not entry:
+            return None
+        ts, data, width, height = entry
+        if now - ts > _CACHE_TTL_SECONDS:
+            _CACHE.pop(key, None)
+            return None
+        return data, width, height
+
+
+def _cache_set(key: tuple, data: bytes, width: int, height: int) -> None:
+    with _CACHE_LOCK:
+        _CACHE[key] = (time.time(), data, width, height)
+        while len(_CACHE) > _CACHE_MAX_ENTRIES:
+            oldest = min(_CACHE, key=lambda k: _CACHE[k][0])
+            _CACHE.pop(oldest, None)
+
+
+def _node_name(node: Any) -> str:
+    if node is None:
+        return ""
+    for name in ("fullName", "name"):
+        fn = getattr(node, name, None)
+        if callable(fn):
+            try:
+                return str(fn())
+            except Exception:
+                pass
+    return str(node)
+
+
+def _cache_key(bridge_node: Any, frame: int, mask_source: str, colorspace: str) -> tuple:
+    """Build a cheap cache key on Nuke's main thread."""
+    def _build() -> tuple:
+        bridge_id = ""
+        k = bridge_node.knob("bridge_id")
+        if k is not None:
+            bridge_id = str(k.value())
+        src = bridge_node.input(0)
+        mask = bridge_node.input(1)
+        return (
+            bridge_id,
+            int(frame),
+            str(mask_source),
+            str(colorspace),
+            _node_name(src),
+            _node_name(mask),
+        )
+    return napi.call(_build)
 
 
 def _resolve_frame(requested: int) -> int:
@@ -108,6 +186,14 @@ def render_frame_png(
     """
     nuke: Any = napi._nuke
     is_mask_mode = mask_source in ("mask input", "invert mask input")
+    key = _cache_key(bridge_node, frame, mask_source, colorspace)
+    cached = _cache_get(key)
+    if cached is not None:
+        try:
+            napi.set_knob_value(bridge_node, "status", f"cache hit: frame {frame}")
+        except Exception:
+            pass
+        return cached
 
     src_path = tempfile.NamedTemporaryFile(
         prefix="comfyui_bridge_src_", suffix=".png", delete=False
@@ -184,6 +270,11 @@ def render_frame_png(
         else:
             data = src_png
 
+        _cache_set(key, data, width, height)
+        try:
+            napi.set_knob_value(bridge_node, "status", f"exported frame {frame}")
+        except Exception:
+            pass
         return data, width, height
     finally:
         try:

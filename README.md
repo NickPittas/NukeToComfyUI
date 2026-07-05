@@ -24,6 +24,12 @@ Returned Read nodes from `/result` are placed next to the originating
 `ComfyUIBridge` node (to the right) using `xpos`/`ypos` knobs, guarded in
 `try`.
 
+Frame exports are cached in memory for 5 minutes, keyed by bridge id, frame,
+mask mode, colorspace, and connected source/mask node names. Re-running the same
+workflow on the same frame should not re-export from Nuke. Use **Clear frame
+cache** after changing the upstream Nuke graph if you need a fresh export for the
+same frame.
+
 ### Triggering ComfyUI workflows from Nuke
 
 The bridge node has a **workflow** dropdown plus **Refresh workflows** and
@@ -45,6 +51,29 @@ Limitations:
 - Nuke does **not** build or patch the workflow graph — it submits the API
   prompt as-is. The workflow still pulls frames via `FromNuke` and returns via
   `ToNuke`.
+
+### Progress & cancellation (Run workflow / Run selected workflow)
+
+When you click **Run workflow** or **Run selected workflow**, Nuke opens a
+`nuke.ProgressTask` and streams ComfyUI execution events over a stdlib
+websocket client connected to `ws://host:port/ws?clientId=...`. The status
+knob and the progress dialog update with the current node, `progress value/max`
+events, and the final outcome.
+
+- If the websocket connection fails (older ComfyUI, firewall, etc.), the
+  bridge falls back to polling `GET /history/{prompt_id}` until the prompt
+  appears, with a spinner in the status knob. No `progress` granularity in
+  that mode.
+- Clicking **Cancel** on the `ProgressTask` stops *monitoring* and marks the
+  status `cancelled`. It does **not** remove the prompt from ComfyUI's queue —
+  the job keeps running server-side (cancelling the ComfyUI queue is deferred,
+  see `TASKS.md` Phase 4).
+- The Run button runs synchronously on Nuke's main thread: the UI stays alive
+  (the websocket select loop pumps the progress dialog at ~0.5s) but Nuke is
+  not usable for other work until the prompt finishes, is cancelled, or the
+  ~10-minute total timeout fires.
+- No new dependencies — the websocket client is stdlib `socket`/`ssl`; the
+  ComfyUI host/port come from the `comfyui_host`/`comfyui_port` knobs.
 
 ## Install
 
@@ -114,8 +143,9 @@ nuke/
     server.py                 # /health, /frame, /result HTTP server
     render.py                 # temp-Write PNG render for /frame
     result.py                 # save bytes + create Read node for /result
-    run_workflow.py           # optional POST /prompt stub (workflow_api_path)
+    run_workflow.py           # POST /prompt + progress monitoring (workflow_api_path)
     workflow_selection.py     # open-workflow dropdown + run-selected handler
+    comfy_progress.py         # stdlib websocket client + ProgressTask + history fallback
 comfyui/
   nuke_bridge/
     __init__.py               # NODE_CLASS_MAPPINGS / NODE_DISPLAY_NAME_MAPPINGS / WEB_DIRECTORY

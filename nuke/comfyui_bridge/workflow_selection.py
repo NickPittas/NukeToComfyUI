@@ -163,22 +163,22 @@ def run_selected_workflow(bridge_node: Any, timeout: float = 30.0) -> Optional[D
         napi.set_knob_value(bridge_node, "status", f"submitted: {wid}")
         return data
 
-    # Backend handed us the prompt; POST /prompt ourselves.
+    # Backend handed us the prompt; POST /prompt ourselves and monitor progress.
     prompt = data.get("prompt")
     if not prompt:
         napi.set_knob_value(bridge_node, "status", f"run: no prompt for {wid}")
         return None
 
-    try:
-        response = _request_json(
-            "POST",
-            f"{_base_url(host, port)}/prompt",
-            {"prompt": prompt, "client_id": data.get("client_id") or client_id},
-            timeout=timeout,
-        )
-    except Exception as exc:
-        napi.set_knob_value(bridge_node, "status", f"prompt post failed: {exc}")
-        return None
-
-    napi.set_knob_value(bridge_node, "status", f"submitted: {wid}")
-    return {"client_id": client_id, "response": response}
+    from . import comfy_progress
+    cid = data.get("client_id") or client_id
+    prompt_id, status = comfy_progress.submit_and_monitor(
+        bridge_node,
+        host,
+        port,
+        cid,
+        prompt_payload=prompt,
+        submit_response=None,  # submit_and_monitor will POST /prompt
+    )
+    label = prompt_id or "(no prompt_id)"
+    napi.set_knob_value(bridge_node, "status", f"workflow {status}: {label}")
+    return {"client_id": cid, "prompt_id": prompt_id, "status": status}

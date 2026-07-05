@@ -76,6 +76,13 @@ def _append_knobs(group_node: Any, nuke: Any) -> None:
         )
         g.addKnob(save)
 
+        clear_cache = Py("clear_frame_cache", "Clear frame cache")
+        clear_cache.setValue(
+            "from comfyui_bridge import render; "
+            "render.clear_cache_from_node(nuke.thisNode())"
+        )
+        g.addKnob(clear_cache)
+
         refresh = Py("refresh_workflows", "Refresh workflows")
         refresh.setValue(
             "from comfyui_bridge import workflow_selection; "

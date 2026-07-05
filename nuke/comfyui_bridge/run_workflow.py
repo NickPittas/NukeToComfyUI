@@ -62,15 +62,34 @@ def submit_from_bridge_node(bridge_node: Any, timeout: float = 30.0) -> Optional
 
 
 def run_from_node(bridge_node: Any) -> None:
-    """PyScript_Knob entrypoint for the bridge node's Run workflow button."""
-    from . import napi
+    """PyScript_Knob entrypoint for the bridge node's Run workflow button.
+
+    Submits `workflow_api_path` to ComfyUI and monitors execution progress
+    via websocket with a Nuke ProgressTask + status knob updates.
+    """
+    from . import comfy_progress, napi
 
     try:
         result = submit_from_bridge_node(bridge_node)
         if result is None:
             napi.set_knob_value(bridge_node, "status", "workflow_api_path is empty")
             return
-        napi.set_knob_value(bridge_node, "status", "workflow submitted")
+
+        host = napi.knob_value(bridge_node, "comfyui_host") or "127.0.0.1"
+        port = int(napi.knob_value(bridge_node, "comfyui_port") or 8188)
+        client_id = result.get("client_id") or ""
+        response = result.get("response") or {}
+
+        prompt_id, status = comfy_progress.submit_and_monitor(
+            bridge_node,
+            host,
+            port,
+            client_id,
+            prompt_payload={},
+            submit_response=response,
+        )
+        label = prompt_id or "(no prompt_id)"
+        napi.set_knob_value(bridge_node, "status", f"workflow {status}: {label}")
     except Exception as exc:
         napi.set_knob_value(bridge_node, "status", f"workflow submit failed: {exc}")
         raise
