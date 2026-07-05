@@ -76,6 +76,15 @@ def start_server() -> BridgeServer:
         return srv
 
 
+def ensure_server() -> BridgeServer:
+    """Return the running server, starting it only if needed."""
+    global _SERVER
+    with _SERVER_LOCK:
+        if _SERVER is not None:
+            return _SERVER
+    return start_server()
+
+
 # --- Request handler -------------------------------------------------------
 
 def _json_response(handler: BaseHTTPRequestHandler, status: int, obj: Dict[str, Any]) -> None:
@@ -139,10 +148,9 @@ class _BridgeHandler(BaseHTTPRequestHandler):
             bridges: list[str] = []
             try:
                 for n in napi.all_nodes():
-                    if getattr(n, "Class", lambda: "")() == "ComfyUIBridge":
-                        k = n.knob("bridge_id")
-                        if k is not None:
-                            bridges.append(str(k.value()))
+                    k = n.knob("bridge_id")
+                    if k is not None:
+                        bridges.append(str(k.value()))
             except Exception:
                 pass
             _json_response(self, 200, {"ok": True, "bridges": bridges})
@@ -169,7 +177,7 @@ class _BridgeHandler(BaseHTTPRequestHandler):
     def _handle_frame(self, bridge_id: str) -> None:
         req = self._read_json()
         frame_req = int(req.get("frame", -1))
-        colorspace = str(req.get("colorspace") or "raw")
+        requested_colorspace = req.get("colorspace")
 
         with _NUKE_LOCK:
             try:
@@ -180,9 +188,7 @@ class _BridgeHandler(BaseHTTPRequestHandler):
                     )
                     return
                 mask_source = str(napi.knob_value(node, "mask_source") or "source alpha")
-                cs = colorspace or str(
-                    napi.knob_value(node, "send_colorspace") or "raw"
-                )
+                cs = str(requested_colorspace or napi.knob_value(node, "send_colorspace") or "raw")
                 frame = render._resolve_frame(frame_req)
                 png, width, height = render.render_frame_png(node, frame, mask_source, cs)
                 prompt = str(napi.knob_value(node, "prompt") or "")
@@ -250,7 +256,7 @@ def autostart_if_in_nuke() -> Optional[BridgeServer]:
     if not napi.has_nuke():
         return None
     try:
-        return start_server()
+        return ensure_server()
     except OSError as exc:
         # Port in use / bind failure: surface to Nuke console but don't crash.
         import sys

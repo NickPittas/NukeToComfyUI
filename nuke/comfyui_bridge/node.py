@@ -1,16 +1,12 @@
-"""ComfyUIBridge Nuke node definition and knob layout.
-
-Uses Nuke's pythonic Group API (`nuke.createNode("Group")` + knobs). All Nuke
-calls are isolated in `napi`.
-"""
+"""ComfyUIBridge Nuke Group factory and knob layout."""
 
 from __future__ import annotations
 
-import os
 import uuid
 from typing import Any
 
 from . import napi
+from .settings import load_settings
 
 
 NODE_CLASS_NAME = "ComfyUIBridge"
@@ -36,10 +32,10 @@ def build_knobs(group_node: Any) -> None:
 
 
 def _append_knobs(group_node: Any, nuke: Any) -> None:
-    k = nuke.knob
     Tab = nuke.Tab_Knob
-    Text = nuke.Text_Knob
     String = nuke.String_Knob
+    Multiline = getattr(nuke, "Multiline_Eval_String_Knob", String)
+    File = getattr(nuke, "File_Knob", String)
     Int = nuke.Int_Knob
     Bool = nuke.Boolean_Knob
     Enum = nuke.Enumeration_Knob
@@ -48,7 +44,6 @@ def _append_knobs(group_node: Any, nuke: Any) -> None:
     g = group_node
 
     g.addKnob(Tab("ComfyUI"))
-    g.addKnob(Text("bridge_header", "ComfyUI Bridge"))
 
     bid = String("bridge_id", "bridge id")
     bid.setFlag(0x1000)  # READ_ONLY-ish flag, harmless if unsupported
@@ -56,9 +51,11 @@ def _append_knobs(group_node: Any, nuke: Any) -> None:
 
     g.addKnob(String("host", "host"))
     g.addKnob(Int("port", "port"))
-    g.addKnob(String("output_directory", "output_directory"))
-    g.addKnob(String("prompt", "prompt"))
-    g.addKnob(String("workflow_api_path", "workflow_api_path"))
+    g.addKnob(String("comfyui_host", "ComfyUI host"))
+    g.addKnob(Int("comfyui_port", "ComfyUI port"))
+    g.addKnob(File("output_directory", "output directory"))
+    g.addKnob(Multiline("prompt", "prompt"))
+    g.addKnob(File("workflow_api_path", "workflow API path"))
 
     g.addKnob(Enum("mask_source", "mask_source", list(MASK_SOURCES)))
     g.addKnob(Enum("send_format", "send_format", list(SEND_FORMATS)))
@@ -69,7 +66,19 @@ def _append_knobs(group_node: Any, nuke: Any) -> None:
     g.addKnob(String("last_result", "last_result"))
 
     if Py is not None:
-        g.addKnob(Py("run_workflow", "Run workflow"))
+        save = Py("save_defaults", "Save defaults")
+        save.setValue(
+            "from comfyui_bridge import node_settings; "
+            "node_settings.save_defaults_from_node(nuke.thisNode())"
+        )
+        g.addKnob(save)
+
+        run = Py("run_workflow", "Run workflow")
+        run.setValue(
+            "from comfyui_bridge import run_workflow; "
+            "run_workflow.run_from_node(nuke.thisNode())"
+        )
+        g.addKnob(run)
 
 
 def create_bridge_node() -> Any:
@@ -77,19 +86,40 @@ def create_bridge_node() -> Any:
     nuke: Any = napi._nuke
 
     def _create() -> Any:
-        node = nuke.createNode("Group", "name ComfyUIBridge")
-        node.addKnob(nuke.Text_Knob("help", "ComfyUI Bridge: see PROTOCOL.md"))
+        node = nuke.createNode("Group", inpanel=False)
+        node.setName("ComfyUIBridge")
+        try:
+            node["tile_color"].setValue(int("355F8CFF", 16))
+        except Exception:
+            pass
+
+        # Real passthrough Group: external input 0 -> internal Output.
+        # The second Input exposes optional external input 1 for masks; it is
+        # not wired to the passthrough output.
+        node.begin()
+        try:
+            inp = nuke.createNode("Input", inpanel=False)
+            inp.setName("source")
+            mask = nuke.createNode("Input", inpanel=False)
+            mask.setName("mask")
+            out = nuke.createNode("Output", inpanel=False)
+            out.setInput(0, inp)
+        finally:
+            node.end()
         return node
 
     node = napi.call(_create)
     build_knobs(node)
 
     # Default values.
+    settings = load_settings()
     bid = _new_bridge_id()
     napi.set_knob_value(node, "bridge_id", bid)
-    napi.set_knob_value(node, "host", "")
-    napi.set_knob_value(node, "port", 0)
-    napi.set_knob_value(node, "output_directory", "")
+    napi.set_knob_value(node, "host", settings.get("host") or "127.0.0.1")
+    napi.set_knob_value(node, "port", int(settings.get("port") or 8765))
+    napi.set_knob_value(node, "comfyui_host", "127.0.0.1")
+    napi.set_knob_value(node, "comfyui_port", 8188)
+    napi.set_knob_value(node, "output_directory", settings.get("output_directory") or "")
     napi.set_knob_value(node, "prompt", "")
     napi.set_knob_value(node, "workflow_api_path", "")
     napi.set_knob_value(node, "mask_source", MASK_SOURCES[0])
@@ -102,11 +132,7 @@ def create_bridge_node() -> Any:
 
 
 def register_node() -> None:
-    """Register ComfyUIBridge in Nuke's node registry via Pythonic Group.
-
-    Most Nuke versions auto-discover Group nodes named `Group`; we expose a
-    convenience menu entry instead of a true IOP to keep this PNG proof simple.
-    """
+    """Backward-compatible registration helper; menu.py is the real entrypoint."""
     if not napi.has_nuke():
         return
     nuke: Any = napi._nuke

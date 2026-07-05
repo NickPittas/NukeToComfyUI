@@ -46,8 +46,23 @@ def submit_from_bridge_node(bridge_node: Any, timeout: float = 30.0) -> Optional
     if not napi.has_nuke():
         return None
     path = napi.knob_value(bridge_node, "workflow_api_path")
-    host = napi.knob_value(bridge_node, "host")
-    port = napi.knob_value(bridge_node, "port")
+    host = napi.knob_value(bridge_node, "comfyui_host")
+    port = napi.knob_value(bridge_node, "comfyui_port")
     if not path:
         return None
     return submit_workflow(host or "127.0.0.1", int(port or 8188), str(path), timeout=timeout)
+
+
+def run_from_node(bridge_node: Any) -> None:
+    """PyScript_Knob entrypoint for the bridge node's Run workflow button."""
+    from . import napi
+
+    try:
+        result = submit_from_bridge_node(bridge_node)
+        if result is None:
+            napi.set_knob_value(bridge_node, "status", "workflow_api_path is empty")
+            return
+        napi.set_knob_value(bridge_node, "status", "workflow submitted")
+    except Exception as exc:
+        napi.set_knob_value(bridge_node, "status", f"workflow submit failed: {exc}")
+        raise

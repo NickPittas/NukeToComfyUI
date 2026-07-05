@@ -56,6 +56,8 @@ Knobs:
 bridge_id
 host
 port
+comfyui_host
+comfyui_port
 output_directory
 prompt
 workflow_api_path
@@ -90,6 +92,8 @@ Use a small JSON file under the user's Nuke home, for example:
 ```
 
 One Nuke process owns one bound bridge server. Node knobs may display/edit the saved global host/port defaults, but changing them requires a server restart or Nuke restart.
+
+Install convention: user `~/.nuke/init.py` only calls `nuke.pluginAddPath('/path/to/repo/nuke')`. This repo's `nuke/menu.py` registers `ComfyUI/ComfyUIBridge` in the node graph Tab menu.
 
 ### Nuke HTTP server
 

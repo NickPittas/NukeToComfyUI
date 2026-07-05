@@ -18,7 +18,8 @@ Goal: prove ComfyUI can pull one frame from a connected Nuke node and return one
 - [ ] Start one local HTTP server on plugin load, using saved host/port defaults.
 - [ ] Implement `GET /health`.
 - [ ] Register a `ComfyUIBridge` Group/Gizmo-style node from `menu.py`.
-- [ ] Add bridge knobs: `bridge_id`, `host`, `port`, `output_directory`, `prompt`, `workflow_api_path`, `mask_source`, `send_format`, `send_colorspace`, `create_read_on_result`, `status`, `last_result`.
+- [ ] Add bridge knobs: `bridge_id`, Nuke server `host`/`port`, `comfyui_host`, `comfyui_port`, `output_directory`, `prompt`, `workflow_api_path`, `mask_source`, `send_format`, `send_colorspace`, `create_read_on_result`, `status`, `last_result`.
+- [ ] Keep user install to one `nuke.pluginAddPath('/path/to/repo/nuke')` line in `~/.nuke/init.py`; repo `nuke/menu.py` owns Tab-menu registration.
 - [ ] Generate stable `bridge_id` values and handle duplicate IDs from copied nodes.
 - [ ] Locate bridge nodes by main-thread scan on request; postpone live registry unless needed.
 - [ ] Route every Nuke API access through the main thread, including node lookup, knob reads/writes, rendering, Read creation, and status updates.

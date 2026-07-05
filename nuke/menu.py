@@ -1,44 +1,32 @@
-"""Top-level Nuke init entry point.
+"""GUI menu registration for NukeToComfyUI.
 
-Copy this file (or symlink it) to ~/.nuke/menu.py, or append:
-    import sys; sys.path.insert(0, "/abs/path/to/inpaint/nuke")
-    import comfyui_bridge  # noqa: F401
-    from comfyui_bridge import node as _cb_node
-    _cb_node.register_node()
-    from comfyui_bridge import server as _cb_server
-    _cb_server.autostart_if_in_nuke()
+Nuke runs menu.py only in interactive sessions. Keep this file to UI commands:
+the user should only need `nuke.pluginAddPath('/path/to/repo/nuke')` in their
+~/.nuke/init.py.
 """
 
 from __future__ import annotations
 
-import sys
+import nuke
+
+from comfyui_bridge import node, server
 
 
-def _bootstrap() -> None:
-    try:
-        import nuke as _nuke  # noqa: F401
-        # Avoid mistaking our own nuke/ directory (namespace package) for Nuke.
-        if not hasattr(_nuke, "executeInMainThreadWithResult"):
-            raise ImportError("not the real Nuke module")
-    except Exception:
-        # Not in Nuke; nothing to do.
-        return
-
-    # Make sure our package is importable when menu.py is loaded directly.
-    here = __file__
-    if here:
-        import os
-        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(here))))
-
-    try:
-        from comfyui_bridge import node as _cb_node  # noqa: WPS433
-        from comfyui_bridge import server as _cb_server  # noqa: WPS433
-        _cb_node.register_node()
-        _cb_server.autostart_if_in_nuke()
-    except Exception as exc:  # pragma: no cover - Nuke console only
-        import sys as _sys
-        _sys.stderr.write(f"[comfyui_bridge] bootstrap failed: {exc!r}\n")
+def _create_bridge_node():
+    server.autostart_if_in_nuke()
+    return node.create_bridge_node()
 
 
-# Run only when interpreted by Nuke's python (nuke importable above).
-_bootstrap()
+def _restart_bridge_server():
+    server.start_server()
+
+
+_nodes = nuke.menu("Nodes")
+_nodes.addCommand("ComfyUI/ComfyUIBridge", _create_bridge_node)
+
+_nuke_menu = nuke.menu("Nuke")
+_bridge_menu = _nuke_menu.addMenu("ComfyUI Bridge")
+_bridge_menu.addCommand("Restart Local Server", _restart_bridge_server)
+
+# Start once in GUI sessions so ComfyUI can pull from existing bridge nodes.
+server.autostart_if_in_nuke()

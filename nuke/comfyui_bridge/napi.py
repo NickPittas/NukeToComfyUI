@@ -102,7 +102,7 @@ def all_nodes() -> Any:
 def find_bridge_node(bridge_id: str) -> Any:
     """Return the ComfyUIBridge node whose bridge_id matches, or None."""
     def _find() -> Any:
-        for n in _nuke.allNodes("ComfyUIBridge"):
+        for n in _nuke.allNodes():
             k = n.knob("bridge_id")
             if k is not None and k.value() == bridge_id:
                 return n

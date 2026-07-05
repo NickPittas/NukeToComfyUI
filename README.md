@@ -20,24 +20,25 @@ until they can be tested inside Nuke (see `nuke/comfyui_bridge/render.py`).
 
 ### Nuke side
 
-Copy (or symlink) the `nuke/comfyui_bridge` package somewhere on your Python
-path and load `nuke/menu.py` from your `~/.nuke/menu.py`. Simplest option:
+Add one plugin path entry to your user `~/.nuke/init.py`:
 
 ```python
-# ~/.nuke/menu.py
-import sys
-sys.path.insert(0, "/abs/path/to/inpaint/nuke")
-import comfyui_bridge  # noqa: F401  (registers settings helpers)
-from comfyui_bridge import node as _cb_node
-_cb_node.register_node()
-from comfyui_bridge import server as _cb_server
-_cb_server.autostart_if_in_nuke()
+# ~/.nuke/init.py
+nuke.pluginAddPath("/home/npittas/.nuke/inpaint/nuke")
 ```
 
-Or copy `nuke/menu.py` to `~/.nuke/menu.py` and edit the path insert.
+Do not paste plugin logic into user `init.py` or `menu.py`. Nuke will discover
+this repo's `nuke/init.py` and `nuke/menu.py` from the plugin path. The bridge is
+created from the node graph Tab menu:
+
+```text
+ComfyUI > ComfyUIBridge
+```
 
 Persistent settings live at `~/.nuke/comfyui_bridge/settings.json` with defaults
 `host=127.0.0.1`, `port=8765`, `output_directory=~/comfyui_bridge_results`.
+Use the bridge node's **Save defaults** button to persist edited host, port, and
+output directory. Restart the local bridge server after changing host/port.
 
 ### ComfyUI side
 
@@ -75,12 +76,13 @@ No new dependencies beyond what ComfyUI already ships:
 
 ```
 nuke/
-  menu.py                     # Nuke init entry point
+  init.py                     # path-only setup loaded by Nuke
+  menu.py                     # Tab-menu command registration
   comfyui_bridge/
     __init__.py
     settings.py               # ~/.nuke/comfyui_bridge/settings.json
     napi.py                   # main-thread isolation for all Nuke API access
-    node.py                   # ComfyUIBridge Group node + knobs
+    node.py                   # ComfyUIBridge Group factory + knobs
     server.py                 # /health, /frame, /result HTTP server
     render.py                 # temp-Write PNG render for /frame
     result.py                 # save bytes + create Read node for /result
