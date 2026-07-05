@@ -1,18 +1,21 @@
 """On-demand frame rendering for /frame requests.
 
-Phase 1: PNG8 RGBA only. Mask modes `source alpha` / `invert source alpha` are
-implemented by Nuke's own alpha handling. `mask input` modes require composing
-the mask input's luma/alpha into the carrier alpha — that path is left as a
-NotImplementedError with a TODO so we don't ship an untested Nuke tree.
+Phase 1: PNG8 RGBA only. All four mask modes are implemented:
+  - source alpha / invert source alpha: handled by a small in-Nuke tree.
+  - mask input / invert mask input: rendered via a robust PIL fallback that
+    composes the mask input's alpha (or luma) into the carrier alpha. The
+    in-Nuke Copy/Shuffle approach would be tidier but the exact knob names
+    vary across Nuke versions and can't be tested here, so PNG-compose wins.
 
 All Nuke API access is on the main thread via `napi`.
 """
 
 from __future__ import annotations
 
+import io
 import os
 import tempfile
-from typing import Any, Tuple
+from typing import Any, Optional, Tuple
 
 from . import napi
 
@@ -21,6 +24,76 @@ def _resolve_frame(requested: int) -> int:
     if requested is None or requested < 0:
         return napi.root_frame()
     return int(requested)
+
+
+def _write_png(nuke: Any, src_node: Any, tmp_path: str, frame: int, temp_nodes: list) -> None:
+    """Render `src_node` to PNG (RGBA when available) at `frame`."""
+    write = nuke.nodes.Write(inputs=[src_node])
+    temp_nodes.append(write)
+    try:
+        write.knob("file_type").setValue("png")
+    except Exception:
+        pass
+    write.knob("file").setValue(tmp_path)
+    try:
+        write.knob("channels").setValue("rgba")
+    except Exception:
+        pass
+    nuke.execute(write, frame, frame)
+
+
+def _pil_replace_alpha(source_png: bytes, mask_png: Optional[bytes], invert: bool) -> bytes:
+    """Return `source_png` with its alpha replaced by the mask carrier alpha.
+
+    `mask_png=None` means all-keep (carrier alpha = 1 everywhere).
+    Otherwise the mask is taken from the mask PNG's alpha channel if it has
+    meaningful variation, else from its luma (RGB average).
+    """
+    from PIL import Image  # local import; only needed on this path
+    import numpy as np
+
+    base = Image.open(io.BytesIO(source_png)).convert("RGBA")
+    arr = np.asarray(base).astype(np.float32)
+    h, w = arr.shape[0], arr.shape[1]
+
+    if mask_png is None:
+        carrier = np.ones((h, w), dtype=np.float32)
+    else:
+        mimg = Image.open(io.BytesIO(mask_png))
+        if mimg.mode not in ("RGBA", "RGB", "L"):
+            mimg = mimg.convert("RGBA")
+        marr = np.asarray(mimg).astype(np.float32) / 255.0
+        mh, mw = marr.shape[0], marr.shape[1]
+        if (mh, mw) != (h, w):
+            resample = getattr(Image, "BILINEAR", 2)
+            mimg = mimg.resize((w, h), resample)
+            marr = np.asarray(mimg).astype(np.float32) / 255.0
+            mh, mw = h, w
+
+        # ponytail: "alpha if present" => mask PNG has an alpha channel that
+        # actually varies across the image; otherwise treat as RGB mask and
+        # use luma. A uniformly-opaque alpha means the source was effectively
+        # RGB and luma is the meaningful signal.
+        has_alpha = (
+            marr.ndim == 3
+            and marr.shape[2] == 4
+            and float(marr[..., 3].max() - marr[..., 3].min()) > 1.0 / 255.0
+        )
+        if has_alpha:
+            carrier = marr[..., 3]
+        elif marr.ndim == 3:
+            carrier = marr[..., :3].mean(axis=2)
+        else:
+            carrier = marr
+
+    if invert:
+        carrier = 1.0 - carrier
+
+    arr[..., 3] = carrier * 255.0
+    out = Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8), mode="RGBA")
+    buf = io.BytesIO()
+    out.save(buf, format="PNG")
+    return buf.getvalue()
 
 
 def render_frame_png(
@@ -34,77 +107,84 @@ def render_frame_png(
     Returns (png_bytes, width, height).
     """
     nuke: Any = napi._nuke
-    tmp_path = tempfile.NamedTemporaryFile(
-        prefix="comfyui_bridge_", suffix=".png", delete=False
+    is_mask_mode = mask_source in ("mask input", "invert mask input")
+
+    src_path = tempfile.NamedTemporaryFile(
+        prefix="comfyui_bridge_src_", suffix=".png", delete=False
     ).name
 
-    def _render() -> Tuple[int, int]:
-        # Build a temp Write tree off the bridge's input 0.
-        src = bridge_node.input(0)
-        if src is None:
-            raise napi.NukeError("ComfyUIBridge input 0 is not connected")
-
-        tree_input = src
-        temp_nodes = []
-
-        if mask_source in ("mask input", "invert mask input"):
-            raise NotImplementedError(
-                "mask input modes are not implemented in Phase 1; "
-                "use 'source alpha' or 'invert source alpha'. "
-                "TODO: compose mask input luma into carrier alpha."
-            )
-
-        # ponytail: source alpha / invert source alpha handled by a Shuffle +
-        # Invert subtree; keep minimal.
-        chain = tree_input
-        if mask_source == "invert source alpha":
-            inv = nuke.nodes.Invert(inputs=[chain], channels="alpha")
-            temp_nodes.append(inv)
-            chain = inv
-
-        if colorspace == "sRGB":
-            # ponytail: explicit sRGB write via a Colorspace node if available,
-            # else rely on Write colorspace knob; minimal.
-            cs = nuke.nodes.Colorspace(inputs=[chain])
-            temp_nodes.append(cs)
-            try:
-                cs.knob("colorspace_in").setValue("raw")
-                cs.knob("colorspace_out").setValue("sRGB")
-            except Exception:
-                pass
-            chain = cs
-
-        write = nuke.nodes.Write(inputs=[chain])
-        temp_nodes.append(write)
-        try:
-            try:
-                write.knob("file_type").setValue("png")
-            except Exception:
-                pass
-            write.knob("file").setValue(tmp_path)
-            try:
-                write.knob("channels").setValue("rgba")
-            except Exception:
-                pass
-            nuke.execute(write, frame, frame)
-
-            # Width/height from the source's format.
-            fmt = src.format()
-            return int(fmt.width()), int(fmt.height())
-        finally:
-            for node in reversed(temp_nodes):
-                try:
-                    nuke.delete(node)
-                except Exception:
-                    pass
-
     try:
-        width, height = napi.call(_render)
-        with open(tmp_path, "rb") as fh:
-            data = fh.read()
+        def _render() -> Tuple[bytes, Optional[bytes], int, int]:
+            src = bridge_node.input(0)
+            if src is None:
+                raise napi.NukeError("ComfyUIBridge input 0 is not connected")
+
+            temp_nodes: list = []
+            try:
+                chain = src
+
+                # source-alpha modes: build a tiny in-Nuke tree.
+                if mask_source == "invert source alpha":
+                    inv = nuke.nodes.Invert(inputs=[chain], channels="alpha")
+                    temp_nodes.append(inv)
+                    chain = inv
+
+                if colorspace == "sRGB":
+                    # ponytail: explicit sRGB write via Colorspace node if
+                    # available, else rely on Write colorspace; minimal.
+                    cs = nuke.nodes.Colorspace(inputs=[chain])
+                    temp_nodes.append(cs)
+                    try:
+                        cs.knob("colorspace_in").setValue("raw")
+                        cs.knob("colorspace_out").setValue("sRGB")
+                    except Exception:
+                        pass
+                    chain = cs
+
+                _write_png(nuke, chain, src_path, frame, temp_nodes)
+                fmt = src.format()
+                width, height = int(fmt.width()), int(fmt.height())
+
+                mask_png: Optional[bytes] = None
+                if is_mask_mode:
+                    mask_input = bridge_node.input(1)
+                    if mask_input is not None:
+                        mask_path = tempfile.NamedTemporaryFile(
+                            prefix="comfyui_bridge_mask_", suffix=".png", delete=False
+                        ).name
+                        try:
+                            _write_png(nuke, mask_input, mask_path, frame, temp_nodes)
+                            with open(mask_path, "rb") as fh:
+                                mask_png = fh.read()
+                        finally:
+                            try:
+                                os.remove(mask_path)
+                            except OSError:
+                                pass
+                    # mask_png stays None for the all-keep disconnected case.
+
+                with open(src_path, "rb") as fh:
+                    src_png = fh.read()
+
+                return src_png, mask_png, width, height
+            finally:
+                for node in reversed(temp_nodes):
+                    try:
+                        nuke.delete(node)
+                    except Exception:
+                        pass
+
+        src_png, mask_png, width, height = napi.call(_render)
+
+        if is_mask_mode:
+            data = _pil_replace_alpha(src_png, mask_png, invert=mask_source == "invert mask input")
+        else:
+            data = src_png
+
         return data, width, height
     finally:
         try:
-            os.remove(tmp_path)
+            os.remove(src_path)
         except OSError:
             pass
+

@@ -12,9 +12,17 @@ See `PLAN.md` and `PROTOCOL.md` for the full architecture.
 (Phase 2), explicit color controls (Phase 3), and discovery/robustness (Phase 4)
 are deferred — see `TASKS.md`.
 
-Mask modes `source alpha` and `invert source alpha` are implemented.
-`mask input` / `invert mask input` raise a `NotImplementedError` in `/frame`
-until they can be tested inside Nuke (see `nuke/comfyui_bridge/render.py`).
+All four mask modes are implemented in `/frame`:
+- `source alpha` / `invert source alpha`: handled by a small in-Nuke tree.
+- `mask input` / `invert mask input`: source RGB is rendered in Nuke, then the
+  mask input's carrier alpha (alpha channel if it varies, else luma) is
+  composited in via a robust PIL fallback (exact Nuke Copy/Shuffle knob names
+  vary across versions and can't be tested here). Disconnected mask input falls
+  back to all-keep (carrier alpha = 1). See `nuke/comfyui_bridge/render.py`.
+
+Returned Read nodes from `/result` are placed next to the originating
+`ComfyUIBridge` node (to the right) using `xpos`/`ypos` knobs, guarded in
+`try`.
 
 ## Install
 

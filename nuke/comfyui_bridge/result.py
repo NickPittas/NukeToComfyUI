@@ -49,6 +49,40 @@ def save_result(
             except Exception:
                 pass
 
+            # Place the new Read visually next to the bridge node (to its
+            # right with a small offset). Best effort — silently skip if any
+            # xpos/ypos access is unavailable.
+            try:
+                def _g(node: Any, name: str) -> Any:
+                    k = node.knob(name)
+                    return k.value() if k is not None else None
+
+                bx = _g(bridge_node, "xpos")
+                by = _g(bridge_node, "ypos")
+                # ponytail: prefer method API if present (some Nuke versions).
+                for getter_name in ("xpos", "ypos"):
+                    if hasattr(bridge_node, getter_name):
+                        try:
+                            val = getattr(bridge_node, getter_name)()
+                            if getter_name == "xpos":
+                                bx = val
+                            else:
+                                by = val
+                        except Exception:
+                            pass
+
+                offset_x = 200
+                offset_y = 0
+                if isinstance(bx, (int, float)) and isinstance(by, (int, float)):
+                    rk_x = read.knob("xpos")
+                    rk_y = read.knob("ypos")
+                    if rk_x is not None:
+                        rk_x.setValue(int(bx) + offset_x)
+                    if rk_y is not None:
+                        rk_y.setValue(int(by) + offset_y)
+            except Exception:
+                pass
+
         napi.call(_add_read)
 
     if bridge_node is not None:
