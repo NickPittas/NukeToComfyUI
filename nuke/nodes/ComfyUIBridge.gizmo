@@ -1,0 +1,71 @@
+#! /usr/bin/env nuke
+##
+## ComfyUIBridge gizmo.
+##
+## Auto-discovered from pluginPath as node class "ComfyUIBridge", so
+## `nuke.createNode('ComfyUIBridge')` and the Tab-menu search both work and
+## Nuke handles input attachment + graph placement natively.
+##
+## The stable user knobs are baked in here so saved scripts round-trip cleanly.
+## Dynamic per-instance defaults (bridge_id uuid, host/port from settings) are
+## filled by the onCreate callback in comfyui_bridge.callbacks (fills only
+## empty values, so reloading a saved script keeps existing values).
+##
+## Internal structure: source Input -> Output passthrough; a second `mask`
+## Input exposes the optional mask pipe used by /frame rendering. It is NOT
+## wired to the output.
+##
+
+Gizmo {
+ name ComfyUIBridge
+ tile_color 0x355f8cff
+ addUserKnob {20 ComfyUI l ComfyUI}
+ addUserKnob {4 bridge_id l "bridge id"}
+ addUserKnob {4 host l host}
+ addUserKnob {7 port l port}
+ addUserKnob {4 comfyui_host l "ComfyUI host"}
+ addUserKnob {7 comfyui_port l "ComfyUI port"}
+ addUserKnob {4 output_directory l "output directory"}
+ addUserKnob {4 prompt l prompt}
+ addUserKnob {5 mask_source l mask_source M {"source alpha" "invert source alpha" "mask input" "invert mask input"}}
+ addUserKnob {5 send_format l send_format M {png8 exr16}}
+ addUserKnob {5 send_colorspace l send_colorspace M {raw sRGB}}
+ addUserKnob {5 workflow_choices l workflow M {"(none)"}}
+ addUserKnob {8 create_read_on_result l create_read_on_result}
+ addUserKnob {4 status l status}
+ addUserKnob {4 last_result l last_result}
+ addUserKnob {22 save_defaults l "Save defaults" T "from comfyui_bridge import node_settings; node_settings.save_defaults_from_node(nuke.thisNode())"}
+ addUserKnob {22 clear_frame_cache l "Clear frame cache" T "from comfyui_bridge import render; render.clear_cache_from_node(nuke.thisNode())"}
+ addUserKnob {22 refresh_workflows l "Refresh workflows" T "from comfyui_bridge import workflow_selection; workflow_selection.refresh_workflow_choices(nuke.thisNode())"}
+ addUserKnob {22 run_selected_workflow l "Run selected workflow" T "from comfyui_bridge import workflow_selection; workflow_selection.run_selected_workflow(nuke.thisNode())"}
+ bridge_id ""
+ host ""
+ port 0
+ comfyui_host ""
+ comfyui_port 0
+ output_directory ""
+ prompt ""
+ mask_source "source alpha"
+ send_format png8
+ send_colorspace raw
+ workflow_choices "(none)"
+ create_read_on_result true
+ status ""
+ last_result ""
+}
+Input {
+ name source
+ xpos 0
+ ypos 0
+}
+Output {
+ name Output1
+ inputs 1
+ xpos 200
+ ypos 0
+}
+Input {
+ name mask
+ xpos 0
+ ypos 100
+}

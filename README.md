@@ -108,12 +108,21 @@ nuke.pluginAddPath("/home/npittas/.nuke/inpaint/nuke")
 ```
 
 Do not paste plugin logic into user `init.py` or `menu.py`. Nuke will discover
-this repo's `nuke/init.py` and `nuke/menu.py` from the plugin path. The bridge is
-created from the node graph Tab menu:
+this repo's `nuke/init.py` and `nuke/menu.py` from the plugin path. The
+plugin's `nuke/init.py` also adds `nuke/nodes/` to pluginPath, so the
+`ComfyUIBridge.gizmo` is auto-discovered as a real node class. The bridge is
+created from the node graph Tab menu (or Tab-search `ComfyUIBridge`):
 
 ```text
 ComfyUI > ComfyUIBridge
 ```
+
+The node is a native gizmo, so Nuke attaches it to the currently selected node
+and places it in the graph like any other node — there is no Python-side
+attachment or positioning. On creation an `onCreate` callback fills the dynamic
+defaults: a generated `bridge_id`, and `host`/`port`/`output_directory` pulled
+from `~/.nuke/comfyui_bridge/settings.json`. The gizmo bakes in the rest of the
+knob layout so saved scripts round-trip without losing values.
 
 Persistent settings live at `~/.nuke/comfyui_bridge/settings.json` with defaults
 `host=127.0.0.1`, `port=8765`, `output_directory=~/comfyui_bridge_results`.
@@ -154,15 +163,18 @@ No new dependencies beyond what ComfyUI already ships:
 
 ```
 nuke/
-  init.py                     # path-only setup loaded by Nuke
-  menu.py                     # Tab-menu command registration
+  init.py                     # path setup + onCreate callback registration
+  menu.py                     # Tab-menu command (native createNode)
+  nodes/
+    ComfyUIBridge.gizmo       # real Nuke gizmo: knobs + Input/Output passthrough
   comfyui_bridge/
     __init__.py
     settings.py               # ~/.nuke/comfyui_bridge/settings.json
     napi.py                   # main-thread isolation for all Nuke API access
-    node.py                   # ComfyUIBridge Group factory + knobs
+    node.py                   # knob spec + ensure_knobs/initialize_defaults + fallback
+    callbacks.py              # onCreate: ensure knobs + fill dynamic defaults
     server.py                 # /health, /frame, /result HTTP server
-    render.py                 # temp-Write PNG render for /frame
+    render.py                 # temp-Write PNG/EXR render for /frame
     result.py                 # save bytes + create Read node for /result
     run_workflow.py           # legacy helper for saved API workflow submission
     workflow_selection.py     # open-workflow dropdown + run-selected handler
