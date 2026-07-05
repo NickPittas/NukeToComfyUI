@@ -1,11 +1,15 @@
 """On-demand frame rendering for /frame requests.
 
-Phase 1: PNG8 RGBA only. All four mask modes are implemented:
-  - source alpha / invert source alpha: handled by a small in-Nuke tree.
-  - mask input / invert mask input: rendered via a robust PIL fallback that
-    composes the mask input's alpha (or luma) into the carrier alpha. The
-    in-Nuke Copy/Shuffle approach would be tidier but the exact knob names
-    vary across Nuke versions and can't be tested here, so PNG-compose wins.
+Phase 1 PNG8 RGBA: all four mask modes implemented; PIL composes mask-input
+alpha into the carrier.
+
+Phase 2 EXR16: half-float RGBA EXR via a temporary Nuke Write node.
+  - source alpha / invert source alpha: native EXR write of a tiny in-Nuke
+    tree, with the same carrier direction as PNG.
+  - mask input / invert mask input: EXR-side channel compose would need Nuke
+    Copy/Shuffle knob names we can't verify here, so this path degrades to the
+    PNG compose + returns actual_format='png8'. Robust and minimal; documented
+    in README.
 
 All Nuke API access is on the main thread via `napi`.
 """
@@ -78,7 +82,7 @@ def _node_name(node: Any) -> str:
     return str(node)
 
 
-def _cache_key(bridge_node: Any, frame: int, mask_source: str, colorspace: str) -> tuple:
+def _cache_key(bridge_node: Any, frame: int, mask_source: str, colorspace: str, fmt: str = "png8") -> tuple:
     """Build a cheap cache key on Nuke's main thread."""
     def _build() -> tuple:
         bridge_id = ""
@@ -92,6 +96,7 @@ def _cache_key(bridge_node: Any, frame: int, mask_source: str, colorspace: str) 
             int(frame),
             str(mask_source),
             str(colorspace),
+            str(fmt),
             _node_name(src),
             _node_name(mask),
         )
@@ -113,6 +118,35 @@ def _write_png(nuke: Any, src_node: Any, tmp_path: str, frame: int, temp_nodes: 
     except Exception:
         pass
     write.knob("file").setValue(tmp_path)
+    try:
+        write.knob("channels").setValue("rgba")
+    except Exception:
+        pass
+    nuke.execute(write, frame, frame)
+
+
+def _write_exr(nuke: Any, src_node: Any, tmp_path: str, frame: int, temp_nodes: list) -> None:
+    """Render `src_node` to half-float RGBA EXR at `frame`.
+
+    Nuke Write knob names vary slightly across versions; we try the common
+    ones and rely on sensible defaults otherwise. The important one is
+    `datatype=half` for 16-bit float; if it can't be set, Nuke's default EXR
+    type still produces a valid file (just possibly full float).
+    """
+    write = nuke.nodes.Write(inputs=[src_node])
+    temp_nodes.append(write)
+    try:
+        write.knob("file_type").setValue("exr")
+    except Exception:
+        pass
+    write.knob("file").setValue(tmp_path)
+    # Half-float (16-bit). Older Nuke uses "datatype"; some use "datatype" with
+    # value "half". Best effort — wrap each in try.
+    for knob_name in ("datatype", "pixel_type"):
+        try:
+            write.knob(knob_name).setValue("half")
+        except Exception:
+            pass
     try:
         write.knob("channels").setValue("rgba")
     except Exception:
@@ -186,7 +220,7 @@ def render_frame_png(
     """
     nuke: Any = napi._nuke
     is_mask_mode = mask_source in ("mask input", "invert mask input")
-    key = _cache_key(bridge_node, frame, mask_source, colorspace)
+    key = _cache_key(bridge_node, frame, mask_source, colorspace, "png8")
     cached = _cache_get(key)
     if cached is not None:
         try:
@@ -281,3 +315,120 @@ def render_frame_png(
             os.remove(src_path)
         except OSError:
             pass
+
+
+def render_frame_exr(
+    bridge_node: Any,
+    frame: int,
+    mask_source: str,
+    colorspace: str,
+) -> Tuple[bytes, int, int]:
+    """Render input 0 of `bridge_node` at `frame` to half-float RGBA EXR bytes.
+
+    Source-alpha modes are written natively as EXR. Mask-input modes can't be
+    composed on the Nuke side without unverified Copy/Shuffle knob names, so
+    they degrade to PNG compose (caller treats result as PNG). Returns
+    (exr_bytes, width, height).
+    """
+    nuke: Any = napi._nuke
+    key = _cache_key(bridge_node, frame, mask_source, colorspace, "exr16")
+    cached = _cache_get(key)
+    if cached is not None:
+        try:
+            napi.set_knob_value(bridge_node, "status", f"cache hit: frame {frame}")
+        except Exception:
+            pass
+        return cached
+
+    src_path = tempfile.NamedTemporaryFile(
+        prefix="comfyui_bridge_src_", suffix=".exr", delete=False
+    ).name
+
+    try:
+        def _render() -> Tuple[bytes, int, int]:
+            src = bridge_node.input(0)
+            if src is None:
+                raise napi.NukeError("ComfyUIBridge input 0 is not connected")
+
+            temp_nodes: list = []
+            try:
+                chain = src
+                # Match PNG semantics: user-facing source alpha means the
+                # visible Nuke alpha/mask is used, but ComfyUI masks are
+                # inverted later (mask = 1 - carrier), so the carrier is
+                # inverted here. Invert source alpha therefore uses raw alpha.
+                if mask_source == "source alpha":
+                    inv = nuke.nodes.Invert(inputs=[chain], channels="alpha")
+                    temp_nodes.append(inv)
+                    chain = inv
+
+                if colorspace == "sRGB":
+                    cs = nuke.nodes.Colorspace(inputs=[chain])
+                    temp_nodes.append(cs)
+                    try:
+                        cs.knob("colorspace_in").setValue("raw")
+                        cs.knob("colorspace_out").setValue("sRGB")
+                    except Exception:
+                        pass
+                    chain = cs
+
+                _write_exr(nuke, chain, src_path, frame, temp_nodes)
+                fmt = src.format()
+                width, height = int(fmt.width()), int(fmt.height())
+
+                with open(src_path, "rb") as fh:
+                    exr = fh.read()
+                return exr, width, height
+            finally:
+                for node in reversed(temp_nodes):
+                    try:
+                        nuke.delete(node)
+                    except Exception:
+                        pass
+
+        exr, width, height = napi.call(_render)
+        _cache_set(key, exr, width, height)
+        try:
+            napi.set_knob_value(bridge_node, "status", f"exported EXR frame {frame}")
+        except Exception:
+            pass
+        return exr, width, height
+    finally:
+        try:
+            os.remove(src_path)
+        except OSError:
+            pass
+
+
+def render_frame(
+    bridge_node: Any,
+    frame: int,
+    mask_source: str,
+    colorspace: str,
+    fmt: str = "png8",
+) -> Tuple[bytes, int, int, str]:
+    """Render one frame in the requested format.
+
+    Returns (data, width, height, actual_format). `actual_format` may differ
+    from `fmt` when the requested path can't honor it (e.g. exr16 + mask-input
+    mode degrades to png8).
+    """
+    fmt = (fmt or "png8").strip().lower()
+    is_mask_mode = mask_source in ("mask input", "invert mask input")
+
+    if fmt == "exr16" and not is_mask_mode:
+        data, w, h = render_frame_exr(bridge_node, frame, mask_source, colorspace)
+        return data, w, h, "exr16"
+
+    # Default / fallback: PNG path (also handles exr16 + mask-input modes).
+    data, w, h = render_frame_png(bridge_node, frame, mask_source, colorspace)
+    actual = "png8" if (fmt != "exr16" or is_mask_mode) else fmt
+    if fmt == "exr16" and is_mask_mode:
+        try:
+            napi.set_knob_value(
+                bridge_node, "status",
+                "exr16 + mask input: PNG fallback (no in-tree compose)",
+            )
+        except Exception:
+            pass
+    return data, w, h, actual

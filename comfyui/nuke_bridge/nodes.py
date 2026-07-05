@@ -31,6 +31,7 @@ class FromNuke:
                 "host": ("STRING", {"default": "127.0.0.1"}),
                 "port": ("INT", {"default": 8765, "min": 1, "max": 65535}),
                 "frame": ("INT", {"default": -1, "min": -1, "max": 2**31 - 1}),
+                "format": (["exr16", "png8"],),
                 "timeout": ("FLOAT", {"default": 30.0, "min": 1.0, "max": 600.0}),
             },
             "optional": {},
@@ -47,22 +48,28 @@ class FromNuke:
         host: str,
         port: int,
         frame: int,
+        format: str,
         timeout: float,
     ) -> Tuple[torch.Tensor, torch.Tensor, str, int, int]:
         url = f"{_base_url(host, port)}/bridge/{_bridge_path_id(bridge_id)}/frame"
         resp = requests.post(
-            url, json={"frame": int(frame)}, timeout=float(timeout)
+            url,
+            json={"frame": int(frame), "format": format},
+            timeout=float(timeout),
         )
         if resp.status_code != 200:
             raise RuntimeError(
                 f"FromNuke: Nuke /frame returned {resp.status_code}: {resp.text[:200]}"
             )
 
-        png = resp.content
-        if not png:
+        body = resp.content
+        if not body:
             raise RuntimeError("FromNuke: empty body from Nuke /frame")
 
-        image, mask, width, height = image_io.png_bytes_to_tensors(png)
+        # Trust the server's actual format (may differ from requested, e.g.
+        # exr16 + mask-input mode degrades to png8 server-side).
+        actual_fmt = resp.headers.get("X-NukeBridge-Format", format)
+        image, mask, width, height = image_io.decode_image_bytes(body, actual_fmt)
 
         prompt_raw = resp.headers.get("X-NukeBridge-Prompt", "")
         try:
@@ -91,6 +98,7 @@ class ToNuke:
                 "host": ("STRING", {"default": "127.0.0.1"}),
                 "port": ("INT", {"default": 8765, "min": 1, "max": 65535}),
                 "filename_prefix": ("STRING", {"default": "comfy_result"}),
+                "format": (["exr16", "png8"],),
                 "timeout": ("FLOAT", {"default": 30.0, "min": 1.0, "max": 600.0}),
             }
         }
@@ -108,18 +116,19 @@ class ToNuke:
         host: str,
         port: int,
         filename_prefix: str,
+        format: str,
         timeout: float,
     ) -> Tuple[torch.Tensor]:
-        png = image_io.tensor_to_png_bytes(image)
+        body, content_type, fmt_tag = image_io.encode_image_bytes(image, format)
         url = f"{_base_url(host, port)}/bridge/{_bridge_path_id(bridge_id)}/result"
         headers = {
-            "Content-Type": "image/png",
+            "Content-Type": content_type,
             "X-NukeBridge-Filename-Prefix": filename_prefix or "comfy_result",
             "X-NukeBridge-Frame": "-1",
-            "X-NukeBridge-Format": "png8",
-            "X-NukeBridge-Colorspace": "sRGB",
+            "X-NukeBridge-Format": fmt_tag,
+            "X-NukeBridge-Colorspace": "raw" if fmt_tag == "exr16" else "sRGB",
         }
-        resp = requests.post(url, data=png, headers=headers, timeout=float(timeout))
+        resp = requests.post(url, data=body, headers=headers, timeout=float(timeout))
         if resp.status_code != 200:
             raise RuntimeError(
                 f"ToNuke: Nuke /result returned {resp.status_code}: {resp.text[:200]}"

@@ -17,7 +17,7 @@ MASK_SOURCES = (
     "mask input",
     "invert mask input",
 )
-SEND_FORMATS = ("png8",)  # exr16 in Phase 2
+SEND_FORMATS = ("png8", "exr16")  # Phase 2: half-float EXR transport
 SEND_COLORSPACES = ("raw", "sRGB")
 
 

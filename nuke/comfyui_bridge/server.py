@@ -188,6 +188,7 @@ class _BridgeHandler(BaseHTTPRequestHandler):
         req = self._read_json()
         frame_req = int(req.get("frame", -1))
         requested_colorspace = req.get("colorspace")
+        requested_format = req.get("format")  # optional client override
 
         with _NUKE_LOCK:
             try:
@@ -199,8 +200,13 @@ class _BridgeHandler(BaseHTTPRequestHandler):
                     return
                 mask_source = str(napi.knob_value(node, "mask_source") or "source alpha")
                 cs = str(requested_colorspace or napi.knob_value(node, "send_colorspace") or "raw")
+                fmt = str(
+                    requested_format or napi.knob_value(node, "send_format") or "png8"
+                )
                 frame = render._resolve_frame(frame_req)
-                png, width, height = render.render_frame_png(node, frame, mask_source, cs)
+                data, width, height, actual_fmt = render.render_frame(
+                    node, frame, mask_source, cs, fmt
+                )
                 prompt = str(napi.knob_value(node, "prompt") or "")
             except NotImplementedError as exc:
                 _json_response(self, 501, {"ok": False, "error": str(exc)})
@@ -209,18 +215,19 @@ class _BridgeHandler(BaseHTTPRequestHandler):
                 _json_response(self, 500, {"ok": False, "error": repr(exc)})
                 return
 
+        content_type = "image/exr" if actual_fmt == "exr16" else "image/png"
         headers = {
-            "Content-Type": "image/png",
+            "Content-Type": content_type,
             "X-NukeBridge-Bridge-Id": resolved_bridge_id,
             "X-NukeBridge-Frame": str(frame),
-            "X-NukeBridge-Format": "png8",
+            "X-NukeBridge-Format": actual_fmt,
             "X-NukeBridge-Width": str(width),
             "X-NukeBridge-Height": str(height),
             "X-NukeBridge-Prompt": urllib.parse.quote(prompt),
             "X-NukeBridge-Mask-Source": mask_source,
             "X-NukeBridge-Colorspace": cs,
         }
-        _binary_response(self, 200, png, headers)
+        _binary_response(self, 200, data, headers)
 
     # -- /result --
 
@@ -228,6 +235,8 @@ class _BridgeHandler(BaseHTTPRequestHandler):
         body = self._read_body()
         prefix = self.headers.get("X-NukeBridge-Filename-Prefix") or "comfy_result"
         colorspace = self.headers.get("X-NukeBridge-Colorspace") or "sRGB"
+        fmt = (self.headers.get("X-NukeBridge-Format") or "png8").strip().lower()
+        ext = "exr" if fmt == "exr16" else "png"
 
         srv = get_server()
         output_dir = (srv.settings if srv else load_settings()).get(
@@ -252,7 +261,7 @@ class _BridgeHandler(BaseHTTPRequestHandler):
                     colorspace=colorspace,
                     bridge_node=node,
                     create_read=create_read,
-                    ext="png",
+                    ext=ext,
                 )
             except Exception as exc:
                 _json_response(self, 500, {"ok": False, "error": repr(exc)})

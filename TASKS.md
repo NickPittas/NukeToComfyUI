@@ -63,12 +63,13 @@ Goal: prove ComfyUI can pull one frame from a connected Nuke node and return one
 
 Goal: stop relying on 8-bit PNG for production use.
 
-- [ ] Add `exr16` send format on Nuke side using temporary Write node with `rgba`.
-- [ ] Add EXR decode in ComfyUI, preferring OpenImageIO if available.
-- [ ] Preserve alpha/mask behavior for EXR.
-- [ ] Add `exr16` result format from `ToNuke` back to Nuke.
-- [ ] Set created Read node colorspace/raw knobs consistently with result metadata.
-- [ ] Keep PNG8 fallback working.
+- [x] Add `exr16` send format on Nuke side using temporary Write node with `rgba`.
+- [x] Add EXR decode in ComfyUI, preferring OpenImageIO if available.
+- [~] Preserve alpha/mask behavior for EXR. (source-alpha modes native; mask-input
+  modes degrade to PNG compose — see `nuke/comfyui_bridge/render.py` and README.)
+- [x] Add `exr16` result format from `ToNuke` back to Nuke.
+- [x] Set created Read node colorspace/raw knobs consistently with result metadata.
+- [x] Keep PNG8 fallback working.
 
 ## Phase 3 - color controls
 

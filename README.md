@@ -8,17 +8,38 @@ See `PLAN.md` and `PROTOCOL.md` for the full architecture.
 
 ## Status
 
-**Phase 1 PNG proof of concept.** Round trip is PNG8 RGBA only. EXR/half-float
-(Phase 2), explicit color controls (Phase 3), and discovery/robustness (Phase 4)
+**Phase 1 + Phase 2 transport.** PNG8 RGBA round trip is the default and has no
+extra dependencies. EXR16 half-float RGBA is available for higher-fidelity
+exchange. Explicit color controls (Phase 3) and discovery/robustness (Phase 4)
 are deferred — see `TASKS.md`.
 
 All four mask modes are implemented in `/frame`:
-- `source alpha` / `invert source alpha`: handled by a small in-Nuke tree.
+- `source alpha` / `invert source alpha`: handled by a small in-Nuke tree
+  (native EXR write for exr16).
 - `mask input` / `invert mask input`: source RGB is rendered in Nuke, then the
   mask input's carrier alpha (alpha channel if it varies, else luma) is
   composited in via a robust PIL fallback (exact Nuke Copy/Shuffle knob names
   vary across versions and can't be tested here). Disconnected mask input falls
   back to all-keep (carrier alpha = 1). See `nuke/comfyui_bridge/render.py`.
+
+### EXR16 half-float transport (Phase 2)
+
+- Nuke → ComfyUI: set the bridge node's `send_format` knob (or the `FromNuke`
+  `format` input) to `exr16`. `/frame` writes a half-float RGBA EXR via a temp
+  Nuke Write node. Source-alpha modes are native EXR; **mask-input modes
+  currently degrade to PNG compose** (response `X-NukeBridge-Format: png8`)
+  because an in-Nuke Copy/Shuffle alpha-inject tree would depend on unverified
+  knob names. See `nuke/comfyui_bridge/render.py`.
+- ComfyUI → Nuke: set the `ToNuke` `format` input to `exr16`. The image is
+  encoded as half-float RGB EXR and saved with a `.exr` extension; the created
+  Nuke Read node is tagged `colorspace=raw`.
+- **EXR on the ComfyUI side requires OpenImageIO** (`pip install OpenImageIO`
+  or your distro's `python3-openimageio`). EXR decode also works through an
+  OpenCV fallback built with OpenEXR support (read-only). If neither is
+  importable, FromNuke raises a clear `RuntimeError` telling you to install
+  OIIO or switch `format` to `png8`. EXR **encode** requires OpenImageIO.
+- HDR values are clamped to `[0,1]` before the diffusion-model tensor; raw
+  scene-referred values are not preserved through this layer yet.
 
 Returned Read nodes from `/result` are placed next to the originating
 `ComfyUIBridge` node (to the right) using `xpos`/`ypos` knobs, guarded in
