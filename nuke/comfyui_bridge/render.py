@@ -123,8 +123,11 @@ def render_frame_png(
             try:
                 chain = src
 
-                # source-alpha modes: build a tiny in-Nuke tree.
-                if mask_source == "invert source alpha":
+                # ComfyUI's MASK socket is inverted from Nuke alpha. To make
+                # the user-facing mode names match Nuke's visible alpha/mask
+                # meaning, source alpha needs an inverted carrier here; the
+                # FromNuke node then does mask = 1 - carrier.
+                if mask_source == "source alpha":
                     inv = nuke.nodes.Invert(inputs=[chain], channels="alpha")
                     temp_nodes.append(inv)
                     chain = inv
@@ -187,4 +190,3 @@ def render_frame_png(
             os.remove(src_path)
         except OSError:
             pass
-

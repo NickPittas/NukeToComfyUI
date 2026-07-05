@@ -99,11 +99,11 @@ Nuke alpha/mask convention exposed to the user:
 0 = transparent / masked
 ```
 
-Formulas for the alpha channel sent to ComfyUI:
+Formulas for the alpha channel sent to ComfyUI. These are intentionally named by the mask seen by the user in Nuke, while ComfyUI's MASK socket is inverted:
 
 ```text
-source alpha:        carrier_alpha = source_alpha
-invert source alpha: carrier_alpha = 1 - source_alpha
+source alpha:        carrier_alpha = 1 - source_alpha
+invert source alpha: carrier_alpha = source_alpha
 mask input:          carrier_alpha = mask_alpha_or_luma
 invert mask input:   carrier_alpha = 1 - mask_alpha_or_luma
 ```
