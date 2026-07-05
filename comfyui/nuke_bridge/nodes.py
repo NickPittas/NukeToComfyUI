@@ -20,6 +20,12 @@ def _bridge_path_id(bridge_id: str) -> str:
     return (bridge_id or "_active").strip() or "_active"
 
 
+def _format_value(value: Any) -> str:
+    """Normalize format, tolerating old workflows where timeout shifted here."""
+    fmt = str(value or "png8").strip().lower()
+    return fmt if fmt in ("exr16", "png8") else "png8"
+
+
 class FromNuke:
     """Pull a frame from a Nuke ComfyUIBridge node."""
 
@@ -31,7 +37,9 @@ class FromNuke:
                 "host": ("STRING", {"default": "127.0.0.1"}),
                 "port": ("INT", {"default": 8765, "min": 1, "max": 65535}),
                 "frame": ("INT", {"default": -1, "min": -1, "max": 2**31 - 1}),
-                "format": (["exr16", "png8"],),
+                # STRING keeps old workflows valid if a previous timeout value
+                # (for example 30) was serialized into this newly-added slot.
+                "format": ("STRING", {"default": "png8"}),
                 "timeout": ("FLOAT", {"default": 30.0, "min": 1.0, "max": 600.0}),
             },
             "optional": {},
@@ -54,7 +62,7 @@ class FromNuke:
         url = f"{_base_url(host, port)}/bridge/{_bridge_path_id(bridge_id)}/frame"
         resp = requests.post(
             url,
-            json={"frame": int(frame), "format": format},
+            json={"frame": int(frame), "format": _format_value(format)},
             timeout=float(timeout),
         )
         if resp.status_code != 200:
@@ -68,7 +76,7 @@ class FromNuke:
 
         # Trust the server's actual format (may differ from requested, e.g.
         # exr16 + mask-input mode degrades to png8 server-side).
-        actual_fmt = resp.headers.get("X-NukeBridge-Format", format)
+        actual_fmt = resp.headers.get("X-NukeBridge-Format", _format_value(format))
         image, mask, width, height = image_io.decode_image_bytes(body, actual_fmt)
 
         prompt_raw = resp.headers.get("X-NukeBridge-Prompt", "")
@@ -98,7 +106,9 @@ class ToNuke:
                 "host": ("STRING", {"default": "127.0.0.1"}),
                 "port": ("INT", {"default": 8765, "min": 1, "max": 65535}),
                 "filename_prefix": ("STRING", {"default": "comfy_result"}),
-                "format": (["exr16", "png8"],),
+                # STRING keeps old workflows valid if a previous timeout value
+                # (for example 30) was serialized into this newly-added slot.
+                "format": ("STRING", {"default": "png8"}),
                 "timeout": ("FLOAT", {"default": 30.0, "min": 1.0, "max": 600.0}),
             }
         }
@@ -119,7 +129,7 @@ class ToNuke:
         format: str,
         timeout: float,
     ) -> Tuple[torch.Tensor]:
-        body, content_type, fmt_tag = image_io.encode_image_bytes(image, format)
+        body, content_type, fmt_tag = image_io.encode_image_bytes(image, _format_value(format))
         url = f"{_base_url(host, port)}/bridge/{_bridge_path_id(bridge_id)}/result"
         headers = {
             "Content-Type": content_type,

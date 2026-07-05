@@ -468,11 +468,21 @@ def submit_and_monitor(
     """
     # Be tolerant of frontend/backend wrappers. ComfyUI /prompt wants the API
     # prompt object itself, not {output: ...} or {prompt: ...}.
+    if isinstance(prompt_payload, str):
+        try:
+            prompt_payload = json.loads(prompt_payload)
+        except ValueError:
+            _set_status(bridge_node, "prompt payload is a non-JSON string")
+            return None, "error"
     if isinstance(prompt_payload, dict):
         if isinstance(prompt_payload.get("output"), dict):
             prompt_payload = prompt_payload["output"]
         elif isinstance(prompt_payload.get("prompt"), dict):
             prompt_payload = prompt_payload["prompt"]
+
+    if not isinstance(prompt_payload, dict) or not prompt_payload:
+        _set_status(bridge_node, f"invalid prompt payload: {type(prompt_payload).__name__}")
+        return None, "error"
 
     response: Dict[str, Any] = submit_response or {}
     if submit_response is None:
@@ -495,8 +505,8 @@ def submit_and_monitor(
     prompt_id = extract_prompt_id(response)
     if not prompt_id:
         detail = response.get("error") or response.get("node_errors") or response
-        text = json.dumps(detail, default=str)[:220]
-        _set_status(bridge_node, f"no prompt_id: {text}")
+        text = json.dumps(detail, default=str)[:500]
+        _set_status(bridge_node, f"no prompt_id from /prompt: {text}")
         return None, "unknown"
 
     status = monitor_execution(
