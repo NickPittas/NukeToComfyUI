@@ -101,6 +101,13 @@ def create_bridge_node() -> Any:
     nuke: Any = napi._nuke
 
     def _create() -> Any:
+        selected = []
+        try:
+            selected = list(nuke.selectedNodes())
+        except Exception:
+            selected = []
+        upstream = selected[0] if selected else None
+
         node = nuke.createNode("Group", inpanel=False)
         node.setName("ComfyUIBridge")
         try:
@@ -121,6 +128,23 @@ def create_bridge_node() -> Any:
             out.setInput(0, inp)
         finally:
             node.end()
+
+        if upstream is not None and upstream is not node:
+            try:
+                node.setInput(0, upstream)
+            except Exception:
+                pass
+            try:
+                ux = upstream.xpos() if hasattr(upstream, "xpos") else upstream.knob("xpos").value()
+                uy = upstream.ypos() if hasattr(upstream, "ypos") else upstream.knob("ypos").value()
+                node.setXpos(int(ux))
+                node.setYpos(int(uy) + 100)
+            except Exception:
+                try:
+                    node.knob("xpos").setValue(int(upstream.knob("xpos").value()))
+                    node.knob("ypos").setValue(int(upstream.knob("ypos").value()) + 100)
+                except Exception:
+                    pass
         return node
 
     node = napi.call(_create)
