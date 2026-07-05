@@ -81,6 +81,11 @@ def try_submit_workflow(
     if not wf:
         return {"ok": False, "error": "workflow not found"}
     prompt = wf.get("prompt")
+    if isinstance(prompt, dict):
+        if isinstance(prompt.get("output"), dict):
+            prompt = prompt["output"]
+        elif isinstance(prompt.get("prompt"), dict):
+            prompt = prompt["prompt"]
     if not prompt:
         return {"ok": False, "error": "workflow has no stored prompt"}
     cid = client_id or uuid.uuid4().hex

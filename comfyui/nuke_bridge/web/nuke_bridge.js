@@ -71,7 +71,7 @@ async function buildPayload() {
     let prompt = null;
     try {
         const out = await app.graphToPrompt();
-        prompt = (out && out.output) || out;
+        prompt = (out && (out.output || out.prompt)) || out;
     } catch (_) {
         prompt = null; // graph not runnable as-is; still advertise the entry
     }
