@@ -87,8 +87,7 @@ Restart ComfyUI. You should see **Nuke Bridge: From Nuke** and
 
 No new dependencies beyond what ComfyUI already ships:
 
-- Nuke side: standard library only (plus optional `requests` for the
-  Nuke-triggered `Run workflow` button).
+- Nuke side: standard library only.
 - ComfyUI side: `requests`, `Pillow`, `numpy`, `torch` (all standard in
   ComfyUI).
 

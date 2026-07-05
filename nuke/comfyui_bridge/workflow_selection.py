@@ -12,6 +12,9 @@ in-process dict keyed by `bridge_id` (refreshed on every `refresh_workflow_choic
 from __future__ import annotations
 
 import uuid
+import json
+import urllib.error
+import urllib.request
 from typing import Any, Dict, List, Optional
 
 # bridge_id -> last fetched workflow list (metadata only).
@@ -22,13 +25,24 @@ def _base_url(host: str, port: int) -> str:
     return f"http://{(host or '127.0.0.1').strip()}:{int(port or 8188)}"
 
 
+def _request_json(method: str, url: str, payload: Optional[Dict[str, Any]] = None, timeout: float = 30.0) -> Dict[str, Any]:
+    body = None if payload is None else json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(url, data=body, method=method)
+    req.add_header("Accept", "application/json")
+    if body is not None:
+        req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", "replace")
+        raise RuntimeError(f"HTTP {exc.code}: {detail[:300]}") from exc
+    return json.loads(raw) if raw else {}
+
+
 def list_workflows(host: str, port: int, timeout: float = 5.0) -> List[Dict[str, Any]]:
     """GET /nuke_bridge/workflows and return the workflow list."""
-    import requests  # local import; only needed on this path
-
-    resp = requests.get(f"{_base_url(host, port)}/nuke_bridge/workflows", timeout=timeout)
-    resp.raise_for_status()
-    data = resp.json() or {}
+    data = _request_json("GET", f"{_base_url(host, port)}/nuke_bridge/workflows", timeout=timeout)
     return list(data.get("workflows") or [])
 
 
@@ -123,7 +137,6 @@ def _selected_workflow_id(bridge_node: Any) -> Optional[str]:
 def run_selected_workflow(bridge_node: Any, timeout: float = 30.0) -> Optional[Dict[str, Any]]:
     """PyScript entrypoint: run the workflow chosen in `workflow_choices`."""
     from . import napi
-    import requests  # local import
 
     wid = _selected_workflow_id(bridge_node)
     if not wid:
@@ -135,13 +148,12 @@ def run_selected_workflow(bridge_node: Any, timeout: float = 30.0) -> Optional[D
     client_id = uuid.uuid4().hex
 
     try:
-        resp = requests.post(
+        data = _request_json(
+            "POST",
             f"{_base_url(host, port)}/nuke_bridge/run_workflow",
-            json={"workflow_id": wid, "client_id": client_id},
+            {"workflow_id": wid, "client_id": client_id},
             timeout=timeout,
         )
-        resp.raise_for_status()
-        data = resp.json() or {}
     except Exception as exc:
         napi.set_knob_value(bridge_node, "status", f"run failed: {exc}")
         return None
@@ -158,15 +170,15 @@ def run_selected_workflow(bridge_node: Any, timeout: float = 30.0) -> Optional[D
         return None
 
     try:
-        presp = requests.post(
+        response = _request_json(
+            "POST",
             f"{_base_url(host, port)}/prompt",
-            json={"prompt": prompt, "client_id": data.get("client_id") or client_id},
+            {"prompt": prompt, "client_id": data.get("client_id") or client_id},
             timeout=timeout,
         )
-        presp.raise_for_status()
     except Exception as exc:
         napi.set_knob_value(bridge_node, "status", f"prompt post failed: {exc}")
         return None
 
     napi.set_knob_value(bridge_node, "status", f"submitted: {wid}")
-    return {"client_id": client_id, "response": presp.json()}
+    return {"client_id": client_id, "response": response}

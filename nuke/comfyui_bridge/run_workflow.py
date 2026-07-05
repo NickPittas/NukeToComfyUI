@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 import os
+import urllib.error
+import urllib.request
 import uuid
 from typing import Any, Dict, Optional
 
@@ -32,12 +34,18 @@ def submit_workflow(
     client_id = uuid.uuid4().hex
     payload = {"prompt": data, "client_id": client_id}
 
-    import requests  # local import; only needed on this path
-
     url = f"http://{host}:{int(port)}/prompt"
-    resp = requests.post(url, json=payload, timeout=timeout)
-    resp.raise_for_status()
-    return {"client_id": client_id, "response": resp.json()}
+    body = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(url, data=body, method="POST")
+    req.add_header("Content-Type", "application/json")
+    req.add_header("Accept", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", "replace")
+        raise RuntimeError(f"HTTP {exc.code}: {detail[:300]}") from exc
+    return {"client_id": client_id, "response": json.loads(raw) if raw else {}}
 
 
 def submit_from_bridge_node(bridge_node: Any, timeout: float = 30.0) -> Optional[Dict[str, Any]]:
