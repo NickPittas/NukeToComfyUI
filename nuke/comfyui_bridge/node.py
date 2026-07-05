@@ -61,6 +61,9 @@ def _append_knobs(group_node: Any, nuke: Any) -> None:
     g.addKnob(Enum("send_format", "send_format", list(SEND_FORMATS)))
     g.addKnob(Enum("send_colorspace", "send_colorspace", list(SEND_COLORSPACES)))
 
+    # Open-workflow dropdown. Choices are repopulated by `refresh_workflows`.
+    g.addKnob(Enum("workflow_choices", "workflow", ["(none)"]))
+
     g.addKnob(Bool("create_read_on_result", "create_read_on_result"))
     g.addKnob(String("status", "status"))
     g.addKnob(String("last_result", "last_result"))
@@ -72,6 +75,20 @@ def _append_knobs(group_node: Any, nuke: Any) -> None:
             "node_settings.save_defaults_from_node(nuke.thisNode())"
         )
         g.addKnob(save)
+
+        refresh = Py("refresh_workflows", "Refresh workflows")
+        refresh.setValue(
+            "from comfyui_bridge import workflow_selection; "
+            "workflow_selection.refresh_workflow_choices(nuke.thisNode())"
+        )
+        g.addKnob(refresh)
+
+        run_sel = Py("run_selected_workflow", "Run selected workflow")
+        run_sel.setValue(
+            "from comfyui_bridge import workflow_selection; "
+            "workflow_selection.run_selected_workflow(nuke.thisNode())"
+        )
+        g.addKnob(run_sel)
 
         run = Py("run_workflow", "Run workflow")
         run.setValue(

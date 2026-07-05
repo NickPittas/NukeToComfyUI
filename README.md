@@ -24,6 +24,28 @@ Returned Read nodes from `/result` are placed next to the originating
 `ComfyUIBridge` node (to the right) using `xpos`/`ypos` knobs, guarded in
 `try`.
 
+### Triggering ComfyUI workflows from Nuke
+
+The bridge node has a **workflow** dropdown plus **Refresh workflows** and
+**Run selected workflow** buttons. The dropdown lists ComfyUI browser
+workflows that are currently open and that contain at least one `FromNuke` or
+`ToNuke` node.
+
+Limitations:
+- The ComfyUI tab with the workflow must be **open** with the frontend
+  extension loaded (`comfyui/nuke_bridge/web/nuke_bridge.js`). Closed tabs are
+  dropped from the list within ~60s.
+- The list is not live — click **Refresh workflows** in Nuke after opening or
+  editing a workflow in ComfyUI.
+- Only workflows containing `FromNuke` and/or `ToNuke` are listed.
+- If no workflows are visible (ComfyUI closed, extension not loaded, etc.),
+  the existing **Run workflow** button + `workflow_api_path` knob remain as a
+  fallback: point it at a saved ComfyUI API JSON file and Nuke will POST it
+  directly to ComfyUI `/prompt`.
+- Nuke does **not** build or patch the workflow graph — it submits the API
+  prompt as-is. The workflow still pulls frames via `FromNuke` and returns via
+  `ToNuke`.
+
 ## Install
 
 ### Nuke side
@@ -93,10 +115,14 @@ nuke/
     server.py                 # /health, /frame, /result HTTP server
     render.py                 # temp-Write PNG render for /frame
     result.py                 # save bytes + create Read node for /result
-    run_workflow.py           # optional POST /prompt stub
+    run_workflow.py           # optional POST /prompt stub (workflow_api_path)
+    workflow_selection.py     # open-workflow dropdown + run-selected handler
 comfyui/
   nuke_bridge/
-    __init__.py               # NODE_CLASS_MAPPINGS / NODE_DISPLAY_NAME_MAPPINGS
+    __init__.py               # NODE_CLASS_MAPPINGS / NODE_DISPLAY_NAME_MAPPINGS / WEB_DIRECTORY
     nodes.py                  # FromNuke, ToNuke
     image_io.py               # PNG bytes <-> ComfyUI tensors
+    workflow_registry.py      # /nuke_bridge/* routes + in-memory workflow list
+    web/
+      nuke_bridge.js          # frontend: publishes open workflows to backend
 ```
