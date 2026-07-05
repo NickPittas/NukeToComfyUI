@@ -174,6 +174,16 @@ class _BridgeHandler(BaseHTTPRequestHandler):
 
     # -- /frame --
 
+    def _resolve_bridge_node(self, bridge_id: str) -> tuple[Any, str]:
+        if bridge_id and bridge_id not in ("_active", "default"):
+            node = napi.find_bridge_node(bridge_id)
+        else:
+            node = napi.find_default_bridge_node()
+        if node is None:
+            return None, bridge_id
+        resolved = napi.bridge_id_for_node(node) or bridge_id
+        return node, resolved
+
     def _handle_frame(self, bridge_id: str) -> None:
         req = self._read_json()
         frame_req = int(req.get("frame", -1))
@@ -181,7 +191,7 @@ class _BridgeHandler(BaseHTTPRequestHandler):
 
         with _NUKE_LOCK:
             try:
-                node = napi.find_bridge_node(bridge_id)
+                node, resolved_bridge_id = self._resolve_bridge_node(bridge_id)
                 if node is None:
                     _json_response(
                         self, 404, {"ok": False, "error": f"bridge_id {bridge_id!r} not found"}
@@ -201,7 +211,7 @@ class _BridgeHandler(BaseHTTPRequestHandler):
 
         headers = {
             "Content-Type": "image/png",
-            "X-NukeBridge-Bridge-Id": bridge_id,
+            "X-NukeBridge-Bridge-Id": resolved_bridge_id,
             "X-NukeBridge-Frame": str(frame),
             "X-NukeBridge-Format": "png8",
             "X-NukeBridge-Width": str(width),
@@ -228,7 +238,7 @@ class _BridgeHandler(BaseHTTPRequestHandler):
             node = None
             create_read = False
             try:
-                node = napi.find_bridge_node(bridge_id)
+                node, _ = self._resolve_bridge_node(bridge_id)
                 if node is not None:
                     create_read = bool(napi.knob_value(node, "create_read_on_result"))
             except Exception:

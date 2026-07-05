@@ -24,6 +24,8 @@ Returns JSON:
 
 ComfyUI `FromNuke` asks Nuke for one frame.
 
+Use `_active` as `bridge_id` to target the selected bridge node in Nuke, or the only bridge node if there is just one. ComfyUI nodes leave `bridge_id` blank by default and send `_active`.
+
 Request JSON:
 
 ```json
@@ -55,6 +57,8 @@ Phase 2 may add `Content-Type: image/exr` for `exr16`.
 ## `POST /bridge/{bridge_id}/result`
 
 ComfyUI `ToNuke` sends one result image back.
+
+Use `_active` as `bridge_id` for the same selected/only bridge fallback.
 
 Request body is binary image bytes.
 

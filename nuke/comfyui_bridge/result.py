@@ -40,7 +40,7 @@ def save_result(
         nuke: Any = napi._nuke
 
         def _add_read() -> None:
-            read = nuke.nodes.Read("file", file=path)
+            read = nuke.nodes.Read(file=path)
             try:
                 if colorspace == "raw":
                     read.knob("colorspace").setValue("raw")

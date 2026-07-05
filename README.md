@@ -64,10 +64,9 @@ No new dependencies beyond what ComfyUI already ships:
 
 ## Quick manual test
 
-1. Nuke: create `ComfyUIBridge`, connect a `Read`/`Constant` chain to input 0,
-   note the `bridge_id` knob value.
-2. ComfyUI: `FromNuke` (set `bridge_id`) → any image op → `ToNuke`
-   (same `bridge_id`).
+1. Nuke: create `ComfyUIBridge`, connect a `Read`/`Constant` chain to input 0.
+2. ComfyUI: `FromNuke` → any image op → `ToNuke`. Leave `bridge_id` blank to
+   use the selected bridge in Nuke, or the only bridge if there is just one.
 3. Run the ComfyUI graph. Nuke should write a PNG into
    `~/comfyui_bridge_results/` and (if `create_read_on_result` is on) create a
    Read node for it.

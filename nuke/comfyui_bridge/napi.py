@@ -110,6 +110,23 @@ def find_bridge_node(bridge_id: str) -> Any:
     return call(_find)
 
 
+def find_default_bridge_node() -> Any:
+    """Return selected bridge, the only bridge, or first bridge as fallback."""
+    def _find() -> Any:
+        bridges = [n for n in _nuke.allNodes() if n.knob("bridge_id") is not None]
+        for n in _nuke.selectedNodes():
+            if n.knob("bridge_id") is not None:
+                return n
+        if len(bridges) == 1:
+            return bridges[0]
+        return bridges[0] if bridges else None
+    return call(_find)
+
+
+def bridge_id_for_node(node: Any) -> str:
+    return str(knob_value(node, "bridge_id") or "")
+
+
 def knob_value(node: Any, name: str) -> Any:
     return call(lambda: node.knob(name).value())
 

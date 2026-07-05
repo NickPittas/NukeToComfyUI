@@ -16,6 +16,10 @@ def _base_url(host: str, port: int) -> str:
     return f"http://{(host or '127.0.0.1').strip()}:{int(port or 8765)}"
 
 
+def _bridge_path_id(bridge_id: str) -> str:
+    return (bridge_id or "_active").strip() or "_active"
+
+
 class FromNuke:
     """Pull a frame from a Nuke ComfyUIBridge node."""
 
@@ -45,10 +49,7 @@ class FromNuke:
         frame: int,
         timeout: float,
     ) -> Tuple[torch.Tensor, torch.Tensor, str, int, int]:
-        if not bridge_id:
-            raise RuntimeError("FromNuke: bridge_id is empty")
-
-        url = f"{_base_url(host, port)}/bridge/{bridge_id.strip()}/frame"
+        url = f"{_base_url(host, port)}/bridge/{_bridge_path_id(bridge_id)}/frame"
         resp = requests.post(
             url, json={"frame": int(frame)}, timeout=float(timeout)
         )
@@ -109,11 +110,8 @@ class ToNuke:
         filename_prefix: str,
         timeout: float,
     ) -> Tuple[torch.Tensor]:
-        if not bridge_id:
-            raise RuntimeError("ToNuke: bridge_id is empty")
-
         png = image_io.tensor_to_png_bytes(image)
-        url = f"{_base_url(host, port)}/bridge/{bridge_id.strip()}/result"
+        url = f"{_base_url(host, port)}/bridge/{_bridge_path_id(bridge_id)}/result"
         headers = {
             "Content-Type": "image/png",
             "X-NukeBridge-Filename-Prefix": filename_prefix or "comfy_result",
