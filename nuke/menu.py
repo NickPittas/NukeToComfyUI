@@ -13,21 +13,31 @@ dynamic defaults.
 from __future__ import annotations
 
 import nuke
+import os
 
-from comfyui_bridge import callbacks, node, server
+from comfyui_bridge import callbacks, server
 
 
 def _create_bridge_node():
-    # Best-effort: make sure the local bridge HTTP server is up before the
-    # first frame pull arrives. Native createNode attaches/places the gizmo.
+    # Best-effort: make sure the local bridge HTTP server is up before the first
+    # frame pull arrives. Then create the real gizmo class. Do not fall back to
+    # a Python-created Group here: if the gizmo is not discoverable, we want the
+    # error to be visible instead of silently getting old placement behavior.
     server.autostart_if_in_nuke()
     callbacks.register()
-    return node.create_bridge_node()
+    return nuke.createNode("ComfyUIBridge")
 
 
 def _restart_bridge_server():
     server.start_server()
 
+
+# Defensive path setup: user pluginAddPath('/path/to/repo/nuke') should run our
+# init.py, but menu.py also ensures the gizmo directory is discoverable before
+# registering the command.
+_nodes_dir = os.path.join(os.path.dirname(__file__), "nodes")
+if os.path.isdir(_nodes_dir) and _nodes_dir not in nuke.pluginPath():
+    nuke.pluginAddPath(_nodes_dir, addToSysPath=False)
 
 _nodes = nuke.menu("Nodes")
 _nodes.addCommand(
