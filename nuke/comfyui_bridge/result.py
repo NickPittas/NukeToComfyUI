@@ -41,14 +41,6 @@ def save_result(
 
         def _add_read() -> None:
             read = nuke.nodes.Read(file=path)
-            try:
-                if colorspace == "raw":
-                    read.knob("colorspace").setValue("raw")
-                else:
-                    read.knob("colorspace").setValue("sRGB")
-            except Exception:
-                pass
-
             # Place the new Read visually next to the bridge node (to its
             # right with a small offset). Best effort — silently skip if any
             # xpos/ypos access is unavailable.

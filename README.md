@@ -31,8 +31,9 @@ All four mask modes are implemented in `/frame`:
   because an in-Nuke Copy/Shuffle alpha-inject tree would depend on unverified
   knob names. See `nuke/comfyui_bridge/render.py`.
 - ComfyUI → Nuke: set the `ToNuke` `format` input to `exr16`. The image is
-  encoded as half-float RGB EXR and saved with a `.exr` extension; the created
-  Nuke Read node is tagged `colorspace=raw`.
+  encoded as half-float RGB EXR and saved with a `.exr` extension. The created
+  Nuke Read node leaves input transform/colorspace untouched; Nuke defaults or
+  project settings decide how it is interpreted.
 - **EXR on the ComfyUI side requires OpenImageIO** (`pip install OpenImageIO`
   or your distro's `python3-openimageio`). EXR decode also works through an
   OpenCV fallback built with OpenEXR support (read-only). If neither is

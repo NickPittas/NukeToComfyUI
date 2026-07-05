@@ -68,7 +68,7 @@ Goal: stop relying on 8-bit PNG for production use.
 - [~] Preserve alpha/mask behavior for EXR. (source-alpha modes native; mask-input
   modes degrade to PNG compose — see `nuke/comfyui_bridge/render.py` and README.)
 - [x] Add `exr16` result format from `ToNuke` back to Nuke.
-- [x] Set created Read node colorspace/raw knobs consistently with result metadata.
+- [x] Leave created Read node input transform/colorspace untouched; do not force raw/sRGB.
 - [x] Keep PNG8 fallback working.
 
 ## Phase 3 - color controls
@@ -78,7 +78,7 @@ Goal: make color conversion explicit without building a full OCIO suite.
 - [ ] Implement `send_colorspace=raw` as no conversion.
 - [ ] Implement `send_colorspace=sRGB` as Nuke-side conversion before transport.
 - [ ] Add metadata fields: `source_colorspace`, `send_colorspace`, `range`, `format`, `bit_depth`, `mask_source`.
-- [ ] Implement `result_colorspace` tagging for created Read nodes.
+- [ ] Add optional result colorspace tagging only if a real Nuke colorspace name is configured.
 - [ ] Document expected model-space behavior: ComfyUI receives model-ready pixels and does not guess hidden transforms.
 
 ## Phase 4 - usability hardening
