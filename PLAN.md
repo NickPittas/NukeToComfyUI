@@ -60,7 +60,6 @@ comfyui_host
 comfyui_port
 output_directory
 prompt
-workflow_api_path
 frame_mode: current / explicit
 frame
 
@@ -126,9 +125,9 @@ POST /bridge/{bridge_id}/result
 
 Nuke writes the returned image to the bridge output directory and creates a Read node if enabled.
 
-### Optional run from Nuke
+### Run from Nuke
 
-The bridge node may include a `Run workflow` button for convenience. It posts a selected ComfyUI API workflow JSON to ComfyUI and watches progress, but it must not build or understand the workflow graph. The workflow still pulls image data through `FromNuke` and returns through `ToNuke`.
+The bridge node exposes **Refresh workflows** and **Run selected workflow**. Open ComfyUI browser workflows are published by the ComfyUI frontend extension and selected from the Nuke dropdown. Nuke must not build or understand the workflow graph. The workflow still pulls image data through `FromNuke` and returns through `ToNuke`.
 
 Progress indication should use ComfyUI WebSocket events plus a Nuke `ProgressTask` where possible.
 
@@ -251,7 +250,7 @@ Licensing is not a blocker for this personal project; prioritize working results
 3. `FromNuke` receives the Nuke image and mask according to `mask_source`.
 4. `ToNuke` sends the result back.
 5. Nuke writes the result and creates a Read node.
-6. If `workflow_api_path` is set, clicking `Run workflow` in Nuke triggers the same ComfyUI workflow and shows progress.
+6. Clicking `Run selected workflow` in Nuke triggers the selected open ComfyUI workflow and shows progress.
 
 ## Deferred
 

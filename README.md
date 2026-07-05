@@ -45,16 +45,16 @@ Limitations:
   editing a workflow in ComfyUI.
 - Only workflows containing `FromNuke` and/or `ToNuke` are listed.
 - If no workflows are visible (ComfyUI closed, extension not loaded, etc.),
-  the existing **Run workflow** button + `workflow_api_path` knob remain as a
-  fallback: point it at a saved ComfyUI API JSON file and Nuke will POST it
-  directly to ComfyUI `/prompt`.
+  use ComfyUI directly or save/reopen the workflow so the browser extension can
+  publish it. The old `workflow_api_path` runner is kept in code only as a
+  fallback helper, but new bridge nodes do not expose a second run button.
 - Nuke does **not** build or patch the workflow graph — it submits the API
   prompt as-is. The workflow still pulls frames via `FromNuke` and returns via
   `ToNuke`.
 
-### Progress & cancellation (Run workflow / Run selected workflow)
+### Progress & cancellation
 
-When you click **Run workflow** or **Run selected workflow**, Nuke opens a
+When you click **Run selected workflow**, Nuke opens a
 `nuke.ProgressTask` and streams ComfyUI execution events over a stdlib
 websocket client connected to `ws://host:port/ws?clientId=...`. The status
 knob and the progress dialog update with the current node, `progress value/max`
@@ -142,7 +142,7 @@ nuke/
     server.py                 # /health, /frame, /result HTTP server
     render.py                 # temp-Write PNG render for /frame
     result.py                 # save bytes + create Read node for /result
-    run_workflow.py           # POST /prompt + progress monitoring (workflow_api_path)
+    run_workflow.py           # legacy helper for saved API workflow submission
     workflow_selection.py     # open-workflow dropdown + run-selected handler
     comfy_progress.py         # stdlib websocket client + ProgressTask + history fallback
 comfyui/

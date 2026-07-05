@@ -18,7 +18,7 @@ Goal: prove ComfyUI can pull one frame from a connected Nuke node and return one
 - [ ] Start one local HTTP server on plugin load, using saved host/port defaults.
 - [ ] Implement `GET /health`.
 - [ ] Register a `ComfyUIBridge` Group/Gizmo-style node from `menu.py`.
-- [ ] Add bridge knobs: `bridge_id`, Nuke server `host`/`port`, `comfyui_host`, `comfyui_port`, `output_directory`, `prompt`, `workflow_api_path`, `mask_source`, `send_format`, `send_colorspace`, `create_read_on_result`, `status`, `last_result`.
+- [ ] Add bridge knobs: `bridge_id`, Nuke server `host`/`port`, `comfyui_host`, `comfyui_port`, `output_directory`, `prompt`, `mask_source`, `send_format`, `send_colorspace`, `workflow_choices`, `create_read_on_result`, `status`, `last_result`.
 - [ ] Keep user install to one `nuke.pluginAddPath('/path/to/repo/nuke')` line in `~/.nuke/init.py`; repo `nuke/menu.py` owns Tab-menu registration.
 - [ ] Generate stable `bridge_id` values and handle duplicate IDs from copied nodes.
 - [ ] Locate bridge nodes by main-thread scan on request; postpone live registry unless needed.
@@ -36,7 +36,7 @@ Goal: prove ComfyUI can pull one frame from a connected Nuke node and return one
 - [ ] Implement `POST /bridge/{bridge_id}/result`.
 - [ ] Save returned result to the bridge output directory with deterministic unique filenames.
 - [ ] Create a Nuke Read node for the returned result when enabled.
-- [ ] Add optional `Run workflow` button that submits a selected ComfyUI API workflow JSON without building/patching the workflow graph.
+- [ ] Add `Refresh workflows` and `Run selected workflow` buttons for open ComfyUI workflows without building/patching the workflow graph.
 - [ ] Add progress indication for Nuke-triggered runs using ComfyUI WebSocket events and Nuke `ProgressTask` where possible.
 
 ### ComfyUI side

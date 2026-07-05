@@ -55,8 +55,6 @@ def _append_knobs(group_node: Any, nuke: Any) -> None:
     g.addKnob(Int("comfyui_port", "ComfyUI port"))
     g.addKnob(File("output_directory", "output directory"))
     g.addKnob(Multiline("prompt", "prompt"))
-    g.addKnob(File("workflow_api_path", "workflow API path"))
-
     g.addKnob(Enum("mask_source", "mask_source", list(MASK_SOURCES)))
     g.addKnob(Enum("send_format", "send_format", list(SEND_FORMATS)))
     g.addKnob(Enum("send_colorspace", "send_colorspace", list(SEND_COLORSPACES)))
@@ -96,13 +94,6 @@ def _append_knobs(group_node: Any, nuke: Any) -> None:
             "workflow_selection.run_selected_workflow(nuke.thisNode())"
         )
         g.addKnob(run_sel)
-
-        run = Py("run_workflow", "Run workflow")
-        run.setValue(
-            "from comfyui_bridge import run_workflow; "
-            "run_workflow.run_from_node(nuke.thisNode())"
-        )
-        g.addKnob(run)
 
 
 def create_bridge_node() -> Any:
@@ -145,7 +136,6 @@ def create_bridge_node() -> Any:
     napi.set_knob_value(node, "comfyui_port", 8188)
     napi.set_knob_value(node, "output_directory", settings.get("output_directory") or "")
     napi.set_knob_value(node, "prompt", "")
-    napi.set_knob_value(node, "workflow_api_path", "")
     napi.set_knob_value(node, "mask_source", MASK_SOURCES[0])
     napi.set_knob_value(node, "send_format", SEND_FORMATS[0])
     napi.set_knob_value(node, "send_colorspace", SEND_COLORSPACES[0])
