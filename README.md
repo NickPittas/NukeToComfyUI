@@ -68,10 +68,9 @@ events, and the final outcome.
   status `cancelled`. It does **not** remove the prompt from ComfyUI's queue —
   the job keeps running server-side (cancelling the ComfyUI queue is deferred,
   see `TASKS.md` Phase 4).
-- The Run button runs synchronously on Nuke's main thread: the UI stays alive
-  (the websocket select loop pumps the progress dialog at ~0.5s) but Nuke is
-  not usable for other work until the prompt finishes, is cancelled, or the
-  ~10-minute total timeout fires.
+- Run buttons start a background monitor thread so Nuke can still service
+  `FromNuke` frame requests while progress updates are marshalled back to the
+  main thread.
 - No new dependencies — the websocket client is stdlib `socket`/`ssl`; the
   ComfyUI host/port come from the `comfyui_host`/`comfyui_port` knobs.
 

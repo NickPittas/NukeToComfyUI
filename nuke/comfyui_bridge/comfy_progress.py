@@ -190,12 +190,20 @@ def _make_progress(title: str) -> Optional[Any]:
 def _progress_set(task: Any, progress: Optional[int], message: Optional[str]) -> None:
     if task is None:
         return
+    from . import napi
+
+    def _set() -> None:
+        try:
+            if message is not None and hasattr(task, "setMessage"):
+                task.setMessage(str(message))
+            if progress is not None and hasattr(task, "setProgress"):
+                # Nuke ProgressTask takes int 0..100.
+                task.setProgress(int(max(0, min(100, progress))))
+        except Exception:
+            pass
+
     try:
-        if message is not None and hasattr(task, "setMessage"):
-            task.setMessage(str(message))
-        if progress is not None and hasattr(task, "setProgress"):
-            # Nuke ProgressTask takes int 0..100.
-            task.setProgress(int(max(0, min(100, progress))))
+        napi.call(_set)
     except Exception:
         pass
 
@@ -203,27 +211,43 @@ def _progress_set(task: Any, progress: Optional[int], message: Optional[str]) ->
 def _progress_cancelled(task: Any) -> bool:
     if task is None:
         return False
-    for name in ("isCancelled", "cancelled"):
-        fn = getattr(task, name, None)
-        if callable(fn):
-            try:
-                return bool(fn())
-            except Exception:
-                return False
-    return False
+    from . import napi
+
+    def _check() -> bool:
+        for name in ("isCancelled", "cancelled"):
+            fn = getattr(task, name, None)
+            if callable(fn):
+                try:
+                    return bool(fn())
+                except Exception:
+                    return False
+        return False
+
+    try:
+        return bool(napi.call(_check))
+    except Exception:
+        return False
 
 
 def _progress_destroy(task: Any) -> None:
     if task is None:
         return
-    for name in ("destroy", "close", "finished"):
-        fn = getattr(task, name, None)
-        if callable(fn):
-            try:
-                fn()
-            except Exception:
-                pass
-            break
+    from . import napi
+
+    def _destroy() -> None:
+        for name in ("destroy", "close", "finished"):
+            fn = getattr(task, name, None)
+            if callable(fn):
+                try:
+                    fn()
+                except Exception:
+                    pass
+                break
+
+    try:
+        napi.call(_destroy)
+    except Exception:
+        pass
 
 
 def _set_status(bridge_node: Any, message: str) -> None:

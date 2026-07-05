@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import uuid
 import json
+import threading
 import urllib.error
 import urllib.request
 from typing import Any, Dict, List, Optional
@@ -136,6 +137,18 @@ def _selected_workflow_id(bridge_node: Any) -> Optional[str]:
 
 def run_selected_workflow(bridge_node: Any, timeout: float = 30.0) -> Optional[Dict[str, Any]]:
     """PyScript entrypoint: run the workflow chosen in `workflow_choices`."""
+    from . import napi
+
+    def _worker() -> None:
+        _run_selected_workflow_sync(bridge_node, timeout=timeout)
+
+    napi.set_knob_value(bridge_node, "status", "workflow starting…")
+    threading.Thread(target=_worker, name="ComfyUIBridgeRunSelected", daemon=True).start()
+    return {"status": "started"}
+
+
+def _run_selected_workflow_sync(bridge_node: Any, timeout: float = 30.0) -> Optional[Dict[str, Any]]:
+    """Worker-thread implementation for run_selected_workflow."""
     from . import napi
 
     wid = _selected_workflow_id(bridge_node)
