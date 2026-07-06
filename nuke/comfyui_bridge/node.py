@@ -157,7 +157,7 @@ def ensure_knobs(node: Any) -> None:
 
 
 def write_colorspaces(nuke: Any) -> List[str]:
-    """Return exact strings accepted by a Nuke Write colorspace knob."""
+    """Return project-provided Nuke colorspaces; never invent names."""
     write = None
     temp_name = "_ComfyUIBridge_colorspace_probe_" + uuid.uuid4().hex[:8]
     try:
@@ -166,10 +166,20 @@ def write_colorspaces(nuke: Any) -> List[str]:
             write.setName(temp_name)
         except Exception:
             pass
-        values = list(write.knob("colorspace").values())
-        return [str(v) for v in values if str(v)]
+        knob = write.knob("colorspace")
+        values = list(knob.values())
+        choices = [str(v) for v in values if str(v)]
+        if choices:
+            return choices
+        try:
+            values = list(nuke.getColorspaceList(knob))
+            choices = [str(v) for v in values if str(v)]
+            if choices:
+                return choices
+        except Exception:
+            pass
     except Exception:
-        return []
+        pass
     finally:
         if write is not None:
             try:
@@ -182,6 +192,15 @@ def write_colorspaces(nuke: Any) -> List[str]:
                 nuke.delete(leaked)
         except Exception:
             pass
+
+    try:
+        values = list(nuke.getOcioColorSpaces())
+        choices = [str(v) for v in values if str(v)]
+        if choices:
+            return choices
+    except Exception:
+        pass
+    return []
 
 
 def refresh_colorspace_choices(node: Any) -> None:
