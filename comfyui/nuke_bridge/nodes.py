@@ -26,6 +26,16 @@ def _format_value(value: Any) -> str:
     return fmt if fmt in ("exr16", "png8") else "png8"
 
 
+def _colorspace_value(value: Any) -> str:
+    """Normalize colorspace; old workflows may shift timeout=30 into this slot."""
+    cs = str(value or "").strip()
+    try:
+        float(cs)
+        return ""
+    except ValueError:
+        return cs
+
+
 class FromNuke:
     """Pull a frame from a Nuke ComfyUIBridge node."""
 
@@ -38,8 +48,8 @@ class FromNuke:
                 "port": ("INT", {"default": 8765, "min": 1, "max": 65535}),
                 "frame": ("INT", {"default": -1, "min": -1, "max": 2**31 - 1}),
                 "format": (["png8", "exr16"], {"default": "png8"}),
-                "colorspace": ("STRING", {"default": "", "multiline": False}),
                 "timeout": ("FLOAT", {"default": 30.0, "min": 1.0, "max": 600.0}),
+                "colorspace": ("STRING", {"default": "", "multiline": False}),
             },
             "optional": {},
         }
@@ -62,7 +72,11 @@ class FromNuke:
         url = f"{_base_url(host, port)}/bridge/{_bridge_path_id(bridge_id)}/frame"
         resp = requests.post(
             url,
-            json={"frame": int(frame), "format": _format_value(format), "colorspace": colorspace or ""},
+            json={
+                "frame": int(frame),
+                "format": _format_value(format),
+                "colorspace": _colorspace_value(colorspace),
+            },
             timeout=float(timeout),
         )
         if resp.status_code != 200:
@@ -107,8 +121,8 @@ class ToNuke:
                 "port": ("INT", {"default": 8765, "min": 1, "max": 65535}),
                 "filename_prefix": ("STRING", {"default": "comfy_result"}),
                 "format": (["png8", "exr16"], {"default": "png8"}),
-                "colorspace": ("STRING", {"default": "", "multiline": False}),
                 "timeout": ("FLOAT", {"default": 30.0, "min": 1.0, "max": 600.0}),
+                "colorspace": ("STRING", {"default": "", "multiline": False}),
             }
         }
 
@@ -136,7 +150,7 @@ class ToNuke:
             "X-NukeBridge-Filename-Prefix": filename_prefix or "comfy_result",
             "X-NukeBridge-Frame": "-1",
             "X-NukeBridge-Format": fmt_tag,
-            "X-NukeBridge-Colorspace": colorspace or "",
+            "X-NukeBridge-Colorspace": _colorspace_value(colorspace),
         }
         resp = requests.post(url, data=body, headers=headers, timeout=float(timeout))
         if resp.status_code != 200:

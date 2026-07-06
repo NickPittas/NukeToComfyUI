@@ -13,7 +13,7 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, Optional, Tuple
 
-from . import napi, render, result
+from . import napi, node as bridge_node_module, render, result
 from .settings import DEFAULT_SETTINGS, load_settings, save_settings
 
 # One global lock so concurrent HTTP requests cannot overlap Nuke renders.
@@ -184,6 +184,21 @@ class _BridgeHandler(BaseHTTPRequestHandler):
         resolved = napi.bridge_id_for_node(node) or bridge_id
         return node, resolved
 
+    def _valid_colorspace_or_empty(self, colorspace: Any) -> str:
+        cs = str(colorspace or "").strip()
+        if not cs:
+            return ""
+        try:
+            float(cs)
+            return ""
+        except ValueError:
+            pass
+        try:
+            values = napi.call(bridge_node_module.write_colorspaces, napi._nuke)
+            return cs if cs in values else ""
+        except Exception:
+            return ""
+
     def _handle_frame(self, bridge_id: str) -> None:
         req = self._read_json()
         frame_req = int(req.get("frame", -1))
@@ -199,7 +214,9 @@ class _BridgeHandler(BaseHTTPRequestHandler):
                     )
                     return
                 mask_source = str(napi.knob_value(node, "mask_source") or "source alpha")
-                cs = str(requested_colorspace or napi.knob_value(node, "send_colorspace") or "")
+                cs = self._valid_colorspace_or_empty(requested_colorspace)
+                if not cs:
+                    cs = self._valid_colorspace_or_empty(napi.knob_value(node, "send_colorspace"))
                 fmt = str(
                     requested_format or napi.knob_value(node, "send_format") or "png8"
                 )
@@ -234,7 +251,7 @@ class _BridgeHandler(BaseHTTPRequestHandler):
     def _handle_result(self, bridge_id: str) -> None:
         body = self._read_body()
         prefix = self.headers.get("X-NukeBridge-Filename-Prefix") or "comfy_result"
-        colorspace = self.headers.get("X-NukeBridge-Colorspace") or ""
+        colorspace = self._valid_colorspace_or_empty(self.headers.get("X-NukeBridge-Colorspace"))
         fmt = (self.headers.get("X-NukeBridge-Format") or "png8").strip().lower()
         ext = "exr" if fmt == "exr16" else "png"
 
@@ -251,7 +268,7 @@ class _BridgeHandler(BaseHTTPRequestHandler):
                 if node is not None:
                     create_read = bool(napi.knob_value(node, "create_read_on_result"))
                     if not colorspace:
-                        colorspace = str(napi.knob_value(node, "send_colorspace") or "")
+                        colorspace = self._valid_colorspace_or_empty(napi.knob_value(node, "send_colorspace"))
             except Exception:
                 pass
 
