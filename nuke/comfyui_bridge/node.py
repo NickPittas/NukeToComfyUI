@@ -32,6 +32,8 @@ MASK_SOURCES = (
     "invert mask input",
 )
 SEND_FORMATS = ("png8", "exr16")  # Phase 2: half-float EXR transport
+VIDEO_FORMATS = ("mp4", "mov")
+VIDEO_MOV_CODECS = ("prores_422hq", "prores_4444")
 
 
 def _new_bridge_id() -> str:
@@ -94,6 +96,21 @@ def _knob_specs() -> List[Tuple[str, Callable[[Any], Any]]]:
         ("create_read_on_result", lambda n: n.Boolean_Knob("create_read_on_result", "create_read_on_result")),
         ("status", lambda n: n.String_Knob("status", "status")),
         ("last_result", lambda n: n.String_Knob("last_result", "last_result")),
+        ("Video", lambda n: n.Tab_Knob("Video")),
+        ("video_format", lambda n: n.Enumeration_Knob("video_format", "video_format", list(VIDEO_FORMATS))),
+        ("video_mov_codec", lambda n: n.Enumeration_Knob("video_mov_codec", "mov codec", list(VIDEO_MOV_CODECS))),
+        ("video_first", lambda n: n.Int_Knob("video_first", "first")),
+        ("video_last", lambda n: n.Int_Knob("video_last", "last")),
+        ("video_fps", lambda n: n.Double_Knob("video_fps", "fps")),
+        ("video_colorspace", lambda n: n.Enumeration_Knob("video_colorspace", "video colorspace", [])),
+        (
+            "refresh_video_colorspaces",
+            lambda n: _pyscript(
+                n, "refresh_video_colorspaces", "Refresh video colorspaces",
+                "from comfyui_bridge import node; "
+                "node.refresh_video_colorspace_choices(nuke.thisNode())",
+            ),
+        ),
         (
             "save_defaults",
             lambda n: _pyscript(
@@ -240,6 +257,33 @@ def refresh_colorspace_choices(node: Any) -> None:
         pass
 
 
+def refresh_video_colorspace_choices(node: Any) -> None:
+    refresh_colorspace_choices_for_knob(node, "video_colorspace")
+
+
+def refresh_colorspace_choices_for_knob(node: Any, knob_name: str) -> None:
+    if not napi.has_nuke():
+        return
+    nuke: Any = napi._nuke
+    try:
+        k = node.knob(knob_name)
+        if k is None:
+            return
+        current = str(k.value() or "")
+        values = write_colorspaces(nuke)
+        if not values:
+            _safe_set(node, "status", "colorspace refresh failed")
+            return
+        k.setValues(values)
+        if current in values:
+            k.setValue(current)
+        else:
+            k.setValue(values[0])
+        _safe_set(node, "status", f"{len(values)} colorspace(s)")
+    except Exception:
+        pass
+
+
 def initialize_defaults(node: Any) -> None:
     """Fill empty dynamic defaults: bridge_id, host/port, output_directory,
     comfyui host/port, create_read_on_result, status.
@@ -289,6 +333,13 @@ def initialize_defaults(node: Any) -> None:
     _str("output_directory", str(settings.get("output_directory") or ""))
     _bool("create_read_on_result", True)
     _str("status", "ready")
+    try:
+        root = napi._nuke.root()
+        _int("video_first", int(root.firstFrame()))
+        _int("video_last", int(root.lastFrame()))
+        _int("video_fps", int(root.fps()))
+    except Exception:
+        pass
 
 
 # --------------------------------------------------------------------------

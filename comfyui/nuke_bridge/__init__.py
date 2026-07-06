@@ -3,16 +3,20 @@
 Drop this package (or a symlink) into ComfyUI's `custom_nodes/` directory.
 """
 
-from .nodes import FromNuke, ToNuke
+from .nodes import FromNuke, FromNukeVideo, ToNuke, ToNukeVideo
 
 NODE_CLASS_MAPPINGS = {
     "FromNuke": FromNuke,
+    "FromNukeVideo": FromNukeVideo,
     "ToNuke": ToNuke,
+    "ToNukeVideo": ToNukeVideo,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "FromNuke": "Nuke Bridge: From Nuke",
+    "FromNukeVideo": "Nuke Bridge: From Nuke Video",
     "ToNuke": "Nuke Bridge: To Nuke",
+    "ToNukeVideo": "Nuke Bridge: To Nuke Video",
 }
 
 # Serve the frontend extension at custom_nodes/nuke_bridge/web/nuke_bridge.js.
@@ -23,7 +27,9 @@ __all__ = [
     "NODE_DISPLAY_NAME_MAPPINGS",
     "WEB_DIRECTORY",
     "FromNuke",
+    "FromNukeVideo",
     "ToNuke",
+    "ToNukeVideo",
 ]
 
 

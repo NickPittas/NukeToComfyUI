@@ -8,12 +8,15 @@ to the main thread when needed.
 from __future__ import annotations
 
 import json
+import os
 import threading
+import time
 import urllib.parse
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, Optional, Tuple
 
-from . import napi, node as bridge_node_module, render, result
+from . import napi, node as bridge_node_module, render, result, video
 from .settings import DEFAULT_SETTINGS, load_settings, save_settings
 
 # One global lock so concurrent HTTP requests cannot overlap Nuke renders.
@@ -21,6 +24,8 @@ _NUKE_LOCK = threading.Lock()
 
 _SERVER: Optional["BridgeServer"] = None
 _SERVER_LOCK = threading.Lock()
+_VIDEO_ASSETS: Dict[str, Dict[str, Any]] = {}
+_VIDEO_ASSET_TTL = 3600.0
 
 
 class BridgeServer:
@@ -113,6 +118,19 @@ def _binary_response(
     handler.wfile.write(body)
 
 
+def _cleanup_video_assets() -> None:
+    now = time.time()
+    for asset_id, asset in list(_VIDEO_ASSETS.items()):
+        if now - float(asset.get("created_at") or 0) <= _VIDEO_ASSET_TTL:
+            continue
+        _VIDEO_ASSETS.pop(asset_id, None)
+        for key in ("main_path", "mask_path"):
+            try:
+                os.remove(str(asset.get(key) or ""))
+            except OSError:
+                pass
+
+
 class _BridgeHandler(BaseHTTPRequestHandler):
     server_version = "ComfyUIBridge/0.1"
     # ponytail: silence default stderr logging; HTTPServer logs enough.
@@ -155,6 +173,10 @@ class _BridgeHandler(BaseHTTPRequestHandler):
                 pass
             _json_response(self, 200, {"ok": True, "bridges": bridges})
             return
+        parts = path.strip("/").split("/")
+        if len(parts) == 3 and parts[0] == "asset":
+            self._handle_asset(parts[1], parts[2])
+            return
         _json_response(self, 404, {"ok": False, "error": "not found"})
 
     def do_POST(self) -> None:  # noqa: N802
@@ -169,6 +191,12 @@ class _BridgeHandler(BaseHTTPRequestHandler):
                 return
             if action == "result":
                 self._handle_result(bridge_id)
+                return
+            if action == "video":
+                self._handle_video(bridge_id)
+                return
+            if action == "video_result":
+                self._handle_video_result(bridge_id)
                 return
         _json_response(self, 404, {"ok": False, "error": "not found"})
 
@@ -307,6 +335,85 @@ class _BridgeHandler(BaseHTTPRequestHandler):
                 _json_response(self, 500, {"ok": False, "error": repr(exc)})
                 return
 
+        _json_response(self, 200, {"ok": True, "path": path})
+
+    # -- /video + /asset + /video_result --
+
+    def _handle_video(self, bridge_id: str) -> None:
+        req = self._read_json()
+        with _NUKE_LOCK:
+            try:
+                node, _resolved_bridge_id = self._resolve_bridge_node(bridge_id)
+                if node is None:
+                    _json_response(self, 404, {"ok": False, "error": f"bridge_id {bridge_id!r} not found"})
+                    return
+                first = int(req.get("frame_start") or napi.knob_value(node, "video_first") or napi.root_frame())
+                last = int(req.get("frame_end") or napi.knob_value(node, "video_last") or first)
+                fps = float(req.get("fps") or napi.knob_value(node, "video_fps") or 24.0)
+                fmt = str(req.get("format") or napi.knob_value(node, "video_format") or "mp4").lower()
+                mov_codec = str(req.get("mov_codec") or napi.knob_value(node, "video_mov_codec") or "prores_422hq").lower()
+                colorspace = self._clean_colorspace(req.get("colorspace") or napi.knob_value(node, "video_colorspace"))
+                bundle = video.export_video_bundle(node, first, last, fps, fmt, mov_codec, colorspace)
+            except Exception as exc:
+                _json_response(self, 500, {"ok": False, "error": repr(exc)})
+                return
+
+        _cleanup_video_assets()
+        asset_id = uuid.uuid4().hex
+        _VIDEO_ASSETS[asset_id] = {"created_at": time.time(), **bundle}
+        srv = get_server()
+        base = srv.url() if srv else ""
+        meta = dict(bundle["metadata"])
+        _json_response(self, 200, {
+            "ok": True,
+            "asset_id": asset_id,
+            "main_url": f"{base}/asset/{asset_id}/main",
+            "mask_url": f"{base}/asset/{asset_id}/mask",
+            "metadata": meta,
+        })
+
+    def _handle_asset(self, asset_id: str, kind: str) -> None:
+        asset = _VIDEO_ASSETS.get(asset_id)
+        if not asset or kind not in ("main", "mask"):
+            _json_response(self, 404, {"ok": False, "error": "asset not found"})
+            return
+        path = str(asset.get("main_path" if kind == "main" else "mask_path") or "")
+        try:
+            with open(path, "rb") as fh:
+                body = fh.read()
+        except OSError as exc:
+            _json_response(self, 404, {"ok": False, "error": repr(exc)})
+            return
+        meta = asset.get("metadata") or {}
+        fmt = meta.get("format") if kind == "main" else "mp4"
+        _binary_response(self, 200, body, {
+            "Content-Type": "video/quicktime" if fmt == "mov" else "video/mp4",
+            "X-NukeBridge-Format": str(fmt),
+            "X-NukeBridge-Frame-Start": str(meta.get("frame_start") or ""),
+            "X-NukeBridge-Frame-End": str(meta.get("frame_end") or ""),
+            "X-NukeBridge-FPS": str(meta.get("fps") or ""),
+        })
+
+    def _handle_video_result(self, bridge_id: str) -> None:
+        body = self._read_body()
+        prefix = self.headers.get("X-NukeBridge-Filename-Prefix") or "comfy_video_result"
+        fmt = (self.headers.get("X-NukeBridge-Format") or "mp4").strip().lower()
+        first = int(float(self.headers.get("X-NukeBridge-Frame-Start") or 1))
+        last = int(float(self.headers.get("X-NukeBridge-Frame-End") or first))
+        colorspace = self._clean_colorspace(self.headers.get("X-NukeBridge-Colorspace"))
+        srv = get_server()
+        output_dir = (srv.settings if srv else load_settings()).get("output_directory") or DEFAULT_SETTINGS["output_directory"]
+        with _NUKE_LOCK:
+            node = None
+            create_read = False
+            try:
+                node, _ = self._resolve_bridge_node(bridge_id)
+                if node is not None:
+                    create_read = bool(napi.knob_value(node, "create_read_on_result"))
+                path = video.save_video_result(body, str(output_dir), prefix, fmt, first, last, colorspace, node, create_read)
+            except Exception as exc:
+                _json_response(self, 500, {"ok": False, "error": repr(exc)})
+                return
         _json_response(self, 200, {"ok": True, "path": path})
 
 
