@@ -13,7 +13,7 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, Optional, Tuple
 
-from . import napi, render, result
+from . import napi, node as bridge_node_module, render, result
 from .settings import DEFAULT_SETTINGS, load_settings, save_settings
 
 # One global lock so concurrent HTTP requests cannot overlap Nuke renders.
@@ -199,19 +199,20 @@ class _BridgeHandler(BaseHTTPRequestHandler):
 
         def _resolve() -> str:
             k = node.knob("send_colorspace") if node is not None else None
-            if k is None:
-                return requested_cs
             try:
-                values = [str(v) for v in list(k.values()) if str(v)]
+                values = bridge_node_module.write_colorspaces(napi._nuke)
             except Exception:
                 values = []
             if requested_cs and values and requested_cs in values:
                 return requested_cs
+            if k is None:
+                return values[0] if values else ""
             current = self._clean_colorspace(k.value())
-            if current and (not values or current in values):
+            if current and values and current in values:
                 return current
             if values:
                 try:
+                    k.setValues(values)
                     k.setValue(values[0])
                 except Exception:
                     pass

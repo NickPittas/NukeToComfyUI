@@ -110,9 +110,22 @@ def _resolve_frame(requested: int) -> int:
 
 
 def _set_write_colorspace(write: Any, colorspace: str) -> None:
-    if not colorspace:
+    cs = str(colorspace or "").strip()
+    if not cs:
         return
-    write.knob("colorspace").setValue(str(colorspace))
+    knob = write.knob("colorspace")
+    if knob is None:
+        return
+    try:
+        values = [str(v) for v in list(knob.values()) if str(v)]
+    except Exception:
+        values = []
+    if values and cs not in values:
+        return
+    try:
+        knob.setValue(cs)
+    except Exception:
+        return
 
 
 def _write_png(nuke: Any, src_node: Any, tmp_path: str, frame: int, temp_nodes: list, colorspace: str = "") -> None:

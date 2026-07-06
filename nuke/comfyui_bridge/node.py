@@ -81,7 +81,15 @@ def _knob_specs() -> List[Tuple[str, Callable[[Any], Any]]]:
         ("prompt", lambda n: _multiline_or_string(n, "prompt", "prompt")),
         ("mask_source", lambda n: n.Enumeration_Knob("mask_source", "mask_source", list(MASK_SOURCES))),
         ("send_format", lambda n: n.Enumeration_Knob("send_format", "send_format", list(SEND_FORMATS))),
-        ("send_colorspace", lambda n: n.Enumeration_Knob("send_colorspace", "send_colorspace", write_colorspaces(n))),
+        ("send_colorspace", lambda n: n.Enumeration_Knob("send_colorspace", "send_colorspace", [])),
+        (
+            "refresh_colorspaces",
+            lambda n: _pyscript(
+                n, "refresh_colorspaces", "Refresh colorspaces",
+                "from comfyui_bridge import node; "
+                "node.refresh_colorspace_choices(nuke.thisNode())",
+            ),
+        ),
         ("workflow_choices", lambda n: n.Enumeration_Knob("workflow_choices", "workflow", ["(none)"])),
         ("create_read_on_result", lambda n: n.Boolean_Knob("create_read_on_result", "create_read_on_result")),
         ("status", lambda n: n.String_Knob("status", "status")),
@@ -160,8 +168,14 @@ def write_colorspaces(nuke: Any) -> List[str]:
     """Return project-provided Nuke colorspaces; never invent names."""
     write = None
     temp_name = "_ComfyUIBridge_colorspace_probe_" + uuid.uuid4().hex[:8]
+    root = None
     try:
-        write = nuke.nodes.Write(inpanel=False)
+        root = nuke.root()
+        try:
+            root.begin()
+        except Exception:
+            pass
+        write = nuke.createNode("Write", "", inpanel=False)
         try:
             write.setName(temp_name)
         except Exception:
@@ -182,6 +196,11 @@ def write_colorspaces(nuke: Any) -> List[str]:
                 nuke.delete(leaked)
         except Exception:
             pass
+        if root is not None:
+            try:
+                root.end()
+            except Exception:
+                pass
 
     return []
 
@@ -209,12 +228,14 @@ def refresh_colorspace_choices(node: Any) -> None:
         current = str(k.value() or "")
         values = write_colorspaces(nuke)
         if not values:
+            _safe_set(node, "status", "colorspace refresh failed")
             return
         k.setValues(values)
         if current in values:
             k.setValue(current)
         else:
             k.setValue(values[0])
+        _safe_set(node, "status", f"{len(values)} colorspace(s)")
     except Exception:
         pass
 
@@ -229,7 +250,6 @@ def initialize_defaults(node: Any) -> None:
     if not napi.has_nuke():
         return
     settings = load_settings()
-    refresh_colorspace_choices(node)
 
     def _str(name: str, value: str) -> None:
         try:

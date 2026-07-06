@@ -42,10 +42,18 @@ def save_result(
         def _add_read() -> None:
             read = nuke.nodes.Read(file=path)
             if colorspace:
-                try:
-                    read.knob("colorspace").setValue(str(colorspace))
-                except Exception:
-                    pass
+                k = read.knob("colorspace")
+                cs = str(colorspace or "").strip()
+                if k is not None and cs:
+                    try:
+                        values = [str(v) for v in list(k.values()) if str(v)]
+                    except Exception:
+                        values = []
+                    if not values or cs in values:
+                        try:
+                            k.setValue(cs)
+                        except Exception:
+                            pass
             # Place the new Read visually next to the bridge node (to its
             # right with a small offset). Best effort — silently skip if any
             # xpos/ypos access is unavailable.
