@@ -349,7 +349,7 @@ class _BridgeHandler(BaseHTTPRequestHandler):
                 if last < first:
                     raise ValueError(f"invalid video frame range: {first}-{last}")
                 fps = float(req.get("fps") or napi.knob_value(node, "video_fps") or 24.0)
-                fmt = str(req.get("format") or napi.knob_value(node, "video_format") or "mov").lower()
+                fmt = "mov"
                 mov_codec = str(req.get("mov_codec") or napi.knob_value(node, "video_mov_codec") or "prores_422hq").lower()
                 colorspace = self._clean_colorspace(req.get("colorspace") or napi.knob_value(node, "video_colorspace"))
                 srv = get_server()
