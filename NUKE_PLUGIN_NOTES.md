@@ -21,9 +21,14 @@ These rules are project knowledge for future implementation work.
   is auto-discovered from pluginPath as node class `ComfyUIBridge`, so
   `nuke.createNode('ComfyUIBridge')` works natively and Nuke handles input
   attachment and graph placement.
-- The gizmo bakes in the stable user knobs (`addUserKnob`) so saved scripts
-  round-trip cleanly. The internal tree is `Input(source) -> Output` plus a
-  second `Input(mask)` for the optional mask pipe (not wired to the output).
+- The gizmo must stay minimal. It defines only the native shell and internal
+  Input/Output nodes. Do **not** hand-write `addUserKnob` entries for bridge
+  controls; wrong knob codes/types break Nuke UI. Bridge knobs are added by
+  `comfyui_bridge.callbacks` using real Nuke Python knob classes.
+- External inputs are defined by internal `Input { inputs 0 ... }` nodes. Do not
+  add an `inputs` property to the `Gizmo` block. Do not add `inputs` to `Output`.
+  Nuke's Tcl stack wires the first `Input` to `Output` in the minimal passthrough.
+- The gizmo file must end with `end_group`, like Nuke-exported gizmos.
 - `menu.py` registers the toolbar/Tab entry via
   `nuke.menu('Nodes').addCommand('ComfyUI/ComfyUIBridge', ..., icon=...)`,
   calling native `createNode`. Do NOT do manual `setInput`/`xpos`/`ypos` from
@@ -34,10 +39,12 @@ These rules are project knowledge for future implementation work.
 
 ## onCreate callback (dynamic defaults)
 
-- `comfyui_bridge.callbacks.register()` installs `nuke.addOnCreate(...,
-  nodeClass='ComfyUIBridge')`. On node creation it:
-  1. `node.ensure_knobs(node)` — adds any knob from the spec that's missing on
-     the running Nuke version (safety net for addUserKnob parsing differences).
+- `ComfyUIBridge.gizmo` has an `onCreate` string that calls
+  `callbacks.initialize_this_node()`. `callbacks.register()` also installs
+  `nuke.addOnCreate(..., nodeClass='ComfyUIBridge')` as a safety net. On node
+  creation it:
+  1. `node.ensure_knobs(node)` — adds any knob from the Python spec that's
+     missing on the node.
   2. `node.initialize_defaults(node)` — fills empty `bridge_id` (uuid),
      `host`/`port`/`output_directory` from settings, `comfyui_host`/`port`,
      `create_read_on_result`, `status`.
@@ -48,9 +55,9 @@ These rules are project knowledge for future implementation work.
 ## Knobs
 
 - Knob layout has a single source of truth: `node._knob_specs()`, a list of
-  `(name, builder(nuke))`. Both the Group fallback and `ensure_knobs` consume
-  it. If you add/remove a knob, update `_knob_specs()` AND the matching
-  `addUserKnob` line in `ComfyUIBridge.gizmo`.
+  `(name, builder(nuke))`. The onCreate callback and Group fallback consume it.
+  If you add/remove a bridge knob, update `_knob_specs()` only; do not add static
+  `addUserKnob` lines to the gizmo.
 - `File_Knob` (with `String_Knob` fallback) for filesystem paths.
 - `Multiline_Eval_String_Knob` (with `String_Knob` fallback) for prompts.
 - `Enumeration_Knob` for mode dropdowns.

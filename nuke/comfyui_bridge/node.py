@@ -4,8 +4,8 @@ The node itself is a real Nuke gizmo (`nuke/nodes/ComfyUIBridge.gizmo`), so
 creation, input attachment, and graph placement are handled natively by Nuke.
 This module owns:
 
-  - the canonical user-knob layout (used by the gizmo's onCreate callback to
-    add any knob missing on a given Nuke version, and by the Group fallback),
+  - the canonical user-knob layout (used by the gizmo's onCreate callback and
+    by the Group fallback),
   - dynamic per-instance defaults (bridge_id uuid + host/port from settings),
   - a thin `create_bridge_node()` that prefers native `createNode('ComfyUIBridge')`
     and falls back to a Python-built Group if the gizmo is not on pluginPath.
@@ -140,8 +140,8 @@ def ensure_knobs(node: Any) -> None:
     """Add any knob from the spec that is missing on `node`.
 
     Runs on Nuke's main thread (called from the onCreate callback). The gizmo
-    bakes these knobs in already; this is the safety net for Nuke versions
-    where an addUserKnob entry didn't parse, and for the Group fallback.
+    does not contain static addUserKnob entries; Python creates the real knob
+    types here.
     """
     if not napi.has_nuke():
         return

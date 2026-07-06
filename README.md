@@ -121,8 +121,9 @@ The node is a native gizmo, so Nuke attaches it to the currently selected node
 and places it in the graph like any other node — there is no Python-side
 attachment or positioning. On creation an `onCreate` callback fills the dynamic
 defaults: a generated `bridge_id`, and `host`/`port`/`output_directory` pulled
-from `~/.nuke/comfyui_bridge/settings.json`. The gizmo bakes in the rest of the
-knob layout so saved scripts round-trip without losing values.
+from `~/.nuke/comfyui_bridge/settings.json`. The same callback creates the
+bridge knobs with Nuke's Python knob classes; the gizmo file stays a minimal
+Input/Output shell.
 
 Persistent settings live at `~/.nuke/comfyui_bridge/settings.json` with defaults
 `host=127.0.0.1`, `port=8765`, `output_directory=~/comfyui_bridge_results`.
@@ -166,7 +167,7 @@ nuke/
   init.py                     # path setup + onCreate callback registration
   menu.py                     # Tab-menu command (native createNode)
   nodes/
-    ComfyUIBridge.gizmo       # real Nuke gizmo: knobs + Input/Output passthrough
+    ComfyUIBridge.gizmo       # real Nuke gizmo: minimal Input/Output shell
   comfyui_bridge/
     __init__.py
     settings.py               # ~/.nuke/comfyui_bridge/settings.json

@@ -1,7 +1,7 @@
 """Nuke onCreate callback for ComfyUIBridge gizmo/group nodes.
 
-The `.gizmo` file bakes in the stable user knobs so saved scripts round-trip.
-This callback is the source of truth for:
+The `.gizmo` file intentionally does not hand-write addUserKnob entries. This
+callback is the source of truth for:
 
   - any knob missing on a given Nuke version (added via the Python API through
     `node.ensure_knobs`),
@@ -9,7 +9,8 @@ This callback is the source of truth for:
     from settings + comfyui host/port + status.
 
 All fills are "if empty", so reloading a saved script keeps the user's values.
-Registered from `init.py` so it covers GUI, terminal, and render-fanout modes.
+Called by the gizmo's onCreate string and registered from `init.py` as a safety
+net for GUI, terminal, and render-fanout modes.
 """
 
 from __future__ import annotations
@@ -69,6 +70,11 @@ def _on_create(node: Any = None) -> None:
     except Exception:
         # A callback must never break node creation.
         pass
+
+
+def initialize_this_node() -> None:
+    """Called from ComfyUIBridge.gizmo onCreate string."""
+    _on_create(None)
 
 
 def register() -> None:
