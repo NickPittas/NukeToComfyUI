@@ -194,6 +194,35 @@ class _BridgeHandler(BaseHTTPRequestHandler):
         except ValueError:
             return cs
 
+    def _bridge_colorspace(self, node: Any, requested: Any = None) -> str:
+        requested_cs = self._clean_colorspace(requested)
+
+        def _resolve() -> str:
+            k = node.knob("send_colorspace") if node is not None else None
+            if k is None:
+                return requested_cs
+            try:
+                values = [str(v) for v in list(k.values()) if str(v)]
+            except Exception:
+                values = []
+            if requested_cs and values and requested_cs in values:
+                return requested_cs
+            current = self._clean_colorspace(k.value())
+            if current and (not values or current in values):
+                return current
+            if values:
+                try:
+                    k.setValue(values[0])
+                except Exception:
+                    pass
+                return values[0]
+            return ""
+
+        try:
+            return napi.call(_resolve)
+        except Exception:
+            return ""
+
     def _handle_frame(self, bridge_id: str) -> None:
         req = self._read_json()
         frame_req = int(req.get("frame", -1))
@@ -209,9 +238,7 @@ class _BridgeHandler(BaseHTTPRequestHandler):
                     )
                     return
                 mask_source = str(napi.knob_value(node, "mask_source") or "source alpha")
-                cs = self._clean_colorspace(requested_colorspace)
-                if not cs:
-                    cs = self._clean_colorspace(napi.knob_value(node, "send_colorspace"))
+                cs = self._bridge_colorspace(node, requested_colorspace)
                 fmt = str(
                     requested_format or napi.knob_value(node, "send_format") or "png8"
                 )
@@ -262,8 +289,7 @@ class _BridgeHandler(BaseHTTPRequestHandler):
                 node, _ = self._resolve_bridge_node(bridge_id)
                 if node is not None:
                     create_read = bool(napi.knob_value(node, "create_read_on_result"))
-                    if not colorspace:
-                        colorspace = self._clean_colorspace(napi.knob_value(node, "send_colorspace"))
+                    colorspace = self._bridge_colorspace(node, colorspace)
             except Exception:
                 pass
 

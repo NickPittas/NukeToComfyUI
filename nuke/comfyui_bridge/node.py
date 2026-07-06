@@ -167,17 +167,7 @@ def write_colorspaces(nuke: Any) -> List[str]:
         except Exception:
             pass
         knob = write.knob("colorspace")
-        values = list(knob.values())
-        choices = [str(v) for v in values if str(v)]
-        if choices:
-            return choices
-        try:
-            values = list(nuke.getColorspaceList(knob))
-            choices = [str(v) for v in values if str(v)]
-            if choices:
-                return choices
-        except Exception:
-            pass
+        return _dedupe([str(v) for v in list(knob.values()) if str(v)])
     except Exception:
         pass
     finally:
@@ -193,14 +183,18 @@ def write_colorspaces(nuke: Any) -> List[str]:
         except Exception:
             pass
 
-    try:
-        values = list(nuke.getOcioColorSpaces())
-        choices = [str(v) for v in values if str(v)]
-        if choices:
-            return choices
-    except Exception:
-        pass
     return []
+
+
+def _dedupe(values: List[str]) -> List[str]:
+    seen = set()
+    out = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        out.append(value)
+    return out
 
 
 def refresh_colorspace_choices(node: Any) -> None:
@@ -214,9 +208,13 @@ def refresh_colorspace_choices(node: Any) -> None:
             return
         current = str(k.value() or "")
         values = write_colorspaces(nuke)
+        if not values:
+            return
         k.setValues(values)
         if current in values:
             k.setValue(current)
+        else:
+            k.setValue(values[0])
     except Exception:
         pass
 
