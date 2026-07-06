@@ -32,7 +32,6 @@ MASK_SOURCES = (
     "invert mask input",
 )
 SEND_FORMATS = ("png8", "exr16")  # Phase 2: half-float EXR transport
-SEND_COLORSPACES = ("linear", "sRGB", "rec709")
 
 
 def _new_bridge_id() -> str:
@@ -158,14 +157,31 @@ def ensure_knobs(node: Any) -> None:
 
 
 def write_colorspaces(nuke: Any) -> List[str]:
-    """Return available Nuke OCIO colorspaces without creating graph nodes."""
+    """Return exact strings accepted by a Nuke Write colorspace knob."""
+    write = None
+    temp_name = "_ComfyUIBridge_colorspace_probe_" + uuid.uuid4().hex[:8]
     try:
-        values = list(nuke.getOcioColorSpaces())
-        if values:
-            return [str(v) for v in values if str(v)]
+        write = nuke.nodes.Write(inpanel=False)
+        try:
+            write.setName(temp_name)
+        except Exception:
+            pass
+        values = list(write.knob("colorspace").values())
+        return [str(v) for v in values if str(v)]
     except Exception:
-        pass
-    return list(SEND_COLORSPACES)
+        return []
+    finally:
+        if write is not None:
+            try:
+                nuke.delete(write)
+            except Exception:
+                pass
+        try:
+            leaked = nuke.toNode(temp_name)
+            if leaked is not None:
+                nuke.delete(leaked)
+        except Exception:
+            pass
 
 
 def refresh_colorspace_choices(node: Any) -> None:
@@ -294,7 +310,6 @@ def _create_group_fallback(nuke: Any) -> Any:
     for name, value in (
         ("mask_source", MASK_SOURCES[0]),
         ("send_format", SEND_FORMATS[0]),
-        ("send_colorspace", SEND_COLORSPACES[0]),
         ("workflow_choices", "(none)"),
     ):
         try:
