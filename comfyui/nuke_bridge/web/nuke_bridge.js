@@ -10,8 +10,8 @@
 
 import { app } from "/scripts/app.js";
 
-const FROM_NUKE = "FromNuke";
-const TO_NUKE = "ToNuke";
+const FROM_NUKE_TYPES = ["FromNuke", "Nuke Bridge: From Nuke"];
+const TO_NUKE_TYPES = ["ToNuke", "Nuke Bridge: To Nuke"];
 const PUBLISH_DEBOUNCE_MS = 800;
 const POLL_MS = 3000;
 
@@ -28,15 +28,33 @@ function safe(fn, fallback) {
     try { return fn(); } catch (_) { return fallback; }
 }
 
-function nodeMatchesType(node, typeStr) {
+function nodeTypeValues(node) {
     if (!node) return false;
-    if (safe(() => node.type === typeStr, false)) return true;
-    // ComfyUI sometimes stores the registered type on nodeData / data.
+    const values = [];
+    for (const key of ["type", "comfyClass", "title"]) {
+        const value = safe(() => node[key], null);
+        if (value) values.push(String(value));
+    }
     const data = safe(() => node.data || node.nodeData, null);
-    if (data && safe(() => data.type === typeStr, false)) return true;
-    // class_type from serialized prompt.
-    if (safe(() => node.properties && node.properties.class_type === typeStr, false)) return true;
-    return false;
+    if (data) {
+        for (const key of ["type", "name", "display_name"]) {
+            const value = safe(() => data[key], null);
+            if (value) values.push(String(value));
+        }
+    }
+    const props = safe(() => node.properties, null);
+    if (props) {
+        for (const key of ["class_type", "Node name for S&R"]) {
+            const value = safe(() => props[key], null);
+            if (value) values.push(String(value));
+        }
+    }
+    return values;
+}
+
+function nodeMatchesAnyType(node, typeList) {
+    const values = nodeTypeValues(node);
+    return values && values.some(v => typeList.includes(v));
 }
 
 function collectNodes() {
@@ -64,8 +82,8 @@ async function buildPayload() {
     let hasFrom = false;
     let hasTo = false;
     for (const n of collectNodes()) {
-        if (nodeMatchesType(n, FROM_NUKE)) hasFrom = true;
-        if (nodeMatchesType(n, TO_NUKE)) hasTo = true;
+        if (nodeMatchesAnyType(n, FROM_NUKE_TYPES)) hasFrom = true;
+        if (nodeMatchesAnyType(n, TO_NUKE_TYPES)) hasTo = true;
     }
 
     let prompt = null;

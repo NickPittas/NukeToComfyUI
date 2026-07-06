@@ -251,7 +251,8 @@ def refresh_colorspace_choices(node: Any) -> None:
         if current in values:
             k.setValue(current)
         else:
-            k.setValue(values[0])
+            _safe_set(node, "status", f"{len(values)} colorspace(s); none selected")
+            return
         _safe_set(node, "status", f"{len(values)} colorspace(s)")
     except Exception:
         pass
@@ -278,7 +279,8 @@ def refresh_colorspace_choices_for_knob(node: Any, knob_name: str) -> None:
         if current in values:
             k.setValue(current)
         else:
-            k.setValue(values[0])
+            _safe_set(node, "status", f"{len(values)} colorspace(s); none selected")
+            return
         _safe_set(node, "status", f"{len(values)} colorspace(s)")
     except Exception:
         pass

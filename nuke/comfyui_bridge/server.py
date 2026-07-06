@@ -234,17 +234,10 @@ class _BridgeHandler(BaseHTTPRequestHandler):
             if requested_cs and values and requested_cs in values:
                 return requested_cs
             if k is None:
-                return values[0] if values else ""
+                return ""
             current = self._clean_colorspace(k.value())
             if current and values and current in values:
                 return current
-            if values:
-                try:
-                    k.setValues(values)
-                    k.setValue(values[0])
-                except Exception:
-                    pass
-                return values[0]
             return ""
 
         try:
@@ -347,8 +340,14 @@ class _BridgeHandler(BaseHTTPRequestHandler):
                 if node is None:
                     _json_response(self, 404, {"ok": False, "error": f"bridge_id {bridge_id!r} not found"})
                     return
-                first = int(req.get("frame_start") or napi.knob_value(node, "video_first") or napi.root_frame())
-                last = int(req.get("frame_end") or napi.knob_value(node, "video_last") or first)
+                req_first = int(req.get("frame_start", -1))
+                req_last = int(req.get("frame_end", -1))
+                node_first = int(napi.knob_value(node, "video_first") or napi.root_frame())
+                node_last = int(napi.knob_value(node, "video_last") or node_first)
+                first = req_first if req_first >= 0 else node_first
+                last = req_last if req_last >= 0 else node_last
+                if last < first:
+                    raise ValueError(f"invalid video frame range: {first}-{last}")
                 fps = float(req.get("fps") or napi.knob_value(node, "video_fps") or 24.0)
                 fmt = str(req.get("format") or napi.knob_value(node, "video_format") or "mp4").lower()
                 mov_codec = str(req.get("mov_codec") or napi.knob_value(node, "video_mov_codec") or "prores_422hq").lower()

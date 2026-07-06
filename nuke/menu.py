@@ -15,7 +15,7 @@ from __future__ import annotations
 import nuke
 import os
 
-from comfyui_bridge import callbacks, node as bridge_node, server
+from comfyui_bridge import callbacks, server
 
 
 def _create_bridge_node():
@@ -25,9 +25,7 @@ def _create_bridge_node():
     # error to be visible instead of silently getting old placement behavior.
     server.autostart_if_in_nuke()
     callbacks.register()
-    created = nuke.createNode("ComfyUIBridge")
-    bridge_node.refresh_colorspace_choices(created)
-    return created
+    return nuke.createNode("ComfyUIBridge")
 
 
 def _restart_bridge_server():
