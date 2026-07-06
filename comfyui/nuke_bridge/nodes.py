@@ -178,7 +178,7 @@ class FromNukeVideo:
             "frame_start": ("INT", {"default": -1, "min": -1, "max": 2**31 - 1}),
             "frame_end": ("INT", {"default": -1, "min": -1, "max": 2**31 - 1}),
             "fps": ("FLOAT", {"default": 24.0, "min": 1.0, "max": 240.0}),
-            "format": (["mp4", "mov"], {"default": "mp4"}),
+            "format": (["mov", "mp4"], {"default": "mov"}),
             "mov_codec": (["prores_422hq", "prores_4444"], {"default": "prores_422hq"}),
             "colorspace": ("STRING", {"default": "", "multiline": False}),
             "timeout": ("FLOAT", {"default": 120.0, "min": 1.0, "max": 3600.0}),
@@ -202,7 +202,7 @@ class FromNukeVideo:
         meta = data.get("metadata") or {}
         with tempfile.TemporaryDirectory(prefix="nuke_bridge_video_") as tmp:
             main_path = os.path.join(tmp, "main.mov" if meta.get("format") == "mov" else "main.mp4")
-            mask_path = os.path.join(tmp, "mask.mp4")
+            mask_path = os.path.join(tmp, "mask.mov")
             for url_key, path in (("main_url", main_path), ("mask_url", mask_path)):
                 r = requests.get(data[url_key], timeout=float(timeout))
                 if r.status_code != 200:

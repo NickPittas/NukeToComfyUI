@@ -11,7 +11,7 @@ from typing import Any, Dict
 from . import napi
 
 
-VIDEO_FORMATS = ("mp4", "mov")
+VIDEO_FORMATS = ("mov", "mp4")
 MOV_CODECS = ("prores_422hq", "prores_4444")
 
 
@@ -214,11 +214,11 @@ def _mask_chain(nuke: Any, bridge_node: Any, mask_source: str, temp_nodes: list[
 
 
 def export_video_bundle(bridge_node: Any, frame_start: int, frame_end: int, fps: float, fmt: str, mov_codec: str, colorspace: str) -> Dict[str, Any]:
-    fmt = fmt if fmt in VIDEO_FORMATS else "mp4"
+    fmt = fmt if fmt in VIDEO_FORMATS else "mov"
     mov_codec = mov_codec if mov_codec in MOV_CODECS else "prores_422hq"
     suffix = ".mov" if fmt == "mov" else ".mp4"
     main_path = _tmp_path(suffix)
-    mask_path = _tmp_path(".mp4")
+    mask_path = _tmp_path(".mov")
     nuke: Any = napi._nuke
 
     def _export() -> Dict[str, Any]:
@@ -230,7 +230,7 @@ def export_video_bundle(bridge_node: Any, frame_start: int, frame_end: int, fps:
             _write_movie(nuke, src, main_path, frame_start, frame_end, fmt, mov_codec, colorspace)
             mask_source = str(napi.knob_value(bridge_node, "mask_source") or "source alpha")
             mask_node = _mask_chain(nuke, bridge_node, mask_source, temp_nodes)
-            _write_movie(nuke, mask_node, mask_path, frame_start, frame_end, "mp4", "h264", "")
+            _write_movie(nuke, mask_node, mask_path, frame_start, frame_end, "mov", "prores_422hq", "")
             f = src.format()
             return {"width": int(f.width()), "height": int(f.height())}
         finally:

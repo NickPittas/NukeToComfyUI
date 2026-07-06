@@ -349,7 +349,7 @@ class _BridgeHandler(BaseHTTPRequestHandler):
                 if last < first:
                     raise ValueError(f"invalid video frame range: {first}-{last}")
                 fps = float(req.get("fps") or napi.knob_value(node, "video_fps") or 24.0)
-                fmt = str(req.get("format") or napi.knob_value(node, "video_format") or "mp4").lower()
+                fmt = str(req.get("format") or napi.knob_value(node, "video_format") or "mov").lower()
                 mov_codec = str(req.get("mov_codec") or napi.knob_value(node, "video_mov_codec") or "prores_422hq").lower()
                 colorspace = self._clean_colorspace(req.get("colorspace") or napi.knob_value(node, "video_colorspace"))
                 bundle = video.export_video_bundle(node, first, last, fps, fmt, mov_codec, colorspace)
@@ -384,7 +384,7 @@ class _BridgeHandler(BaseHTTPRequestHandler):
             _json_response(self, 404, {"ok": False, "error": repr(exc)})
             return
         meta = asset.get("metadata") or {}
-        fmt = meta.get("format") if kind == "main" else "mp4"
+        fmt = meta.get("format") if kind == "main" else "mov"
         _binary_response(self, 200, body, {
             "Content-Type": "video/quicktime" if fmt == "mov" else "video/mp4",
             "X-NukeBridge-Format": str(fmt),
@@ -396,7 +396,7 @@ class _BridgeHandler(BaseHTTPRequestHandler):
     def _handle_video_result(self, bridge_id: str) -> None:
         body = self._read_body()
         prefix = self.headers.get("X-NukeBridge-Filename-Prefix") or "comfy_video_result"
-        fmt = (self.headers.get("X-NukeBridge-Format") or "mp4").strip().lower()
+        fmt = (self.headers.get("X-NukeBridge-Format") or "mov").strip().lower()
         first = int(float(self.headers.get("X-NukeBridge-Frame-Start") or 1))
         last = int(float(self.headers.get("X-NukeBridge-Frame-End") or first))
         colorspace = self._clean_colorspace(self.headers.get("X-NukeBridge-Colorspace"))
