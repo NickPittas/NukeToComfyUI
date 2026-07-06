@@ -50,8 +50,21 @@ def _codec_debug(write: Any) -> str:
         items = []
     for name, knob in items:
         lname = str(name).lower()
-        if any(token in lname for token in ("codec", "compression", "profile", "format")):
-            found.append(f"{name}={_knob_values(knob)!r}")
+        label = ""
+        try:
+            label = str(knob.label())
+        except Exception:
+            pass
+        llabel = label.lower()
+        if any(token in lname or token in llabel for token in ("codec", "compression", "profile", "quality", "format")):
+            found.append(f"{name}({label})={_knob_values(knob)!r}")
+    if not found:
+        for name, knob in items:
+            try:
+                label = str(knob.label())
+            except Exception:
+                label = ""
+            found.append(f"{name}({label})")
     return "; ".join(found)
 
 
@@ -59,7 +72,7 @@ def _set_movie_format(write: Any) -> None:
     k = write.knob("file_type")
     if k is None:
         return
-    _set_enum_by_alias(k, ("mov", "movie", "quicktime", "quicktime/mov"))
+    _set_enum_by_alias(k, ("mov", "mov64", "movie", "quicktime", "quicktime/mov"))
 
 
 def _set_movie_codec(write: Any, fmt: str, mov_codec: str) -> str:
@@ -86,10 +99,14 @@ def _set_first_matching_knob(write: Any, names: tuple[str, ...], aliases: tuple[
     candidates = list(names)
     wanted = {_norm(name) for name in names}
     try:
-        candidates.extend(
-            name for name in write.knobs().keys()
-            if _norm(name) in wanted
-        )
+        for name, knob in write.knobs().items():
+            label = ""
+            try:
+                label = str(knob.label())
+            except Exception:
+                pass
+            if _norm(name) in wanted or _norm(label) in wanted:
+                candidates.append(name)
     except Exception:
         pass
 
