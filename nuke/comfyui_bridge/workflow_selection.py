@@ -200,23 +200,35 @@ def _run_selected_workflow_sync(bridge_node: Any, timeout: float = 30.0) -> Opti
 
 
 def _patch_nuke_bridge_prompt(prompt: Any, bridge_node: Any) -> Any:
-    """Apply Nuke-side bridge settings to FromNuke/ToNuke nodes before submit."""
+    """Apply Nuke-side bridge settings to NukeBridge nodes before submit."""
     from . import napi
 
     fmt = str(napi.knob_value(bridge_node, "send_format") or "png8").strip().lower()
     if fmt not in ("png8", "exr16"):
         fmt = "png8"
     colorspace = str(napi.knob_value(bridge_node, "send_colorspace") or "")
+    video_format = str(napi.knob_value(bridge_node, "video_format") or "mov").strip().lower()
+    if video_format not in ("mov", "mp4"):
+        video_format = "mov"
+    video_codec = str(napi.knob_value(bridge_node, "video_mov_codec") or "prores_422hq").strip().lower()
+    if video_codec not in ("prores_422hq", "prores_4444"):
+        video_codec = "prores_422hq"
+    video_colorspace = str(napi.knob_value(bridge_node, "video_colorspace") or "")
 
     patched = copy.deepcopy(prompt)
     for node in (patched or {}).values() if isinstance(patched, dict) else []:
         if not isinstance(node, dict):
             continue
         class_type = node.get("class_type")
-        if class_type not in ("FromNuke", "ToNuke"):
+        if class_type not in ("FromNuke", "ToNuke", "FromNukeVideo", "ToNukeVideo"):
             continue
         inputs = node.get("inputs")
         if isinstance(inputs, dict):
-            inputs["format"] = fmt
-            inputs["colorspace"] = colorspace if class_type == "FromNuke" else ""
+            if class_type in ("FromNuke", "ToNuke"):
+                inputs["format"] = fmt
+                inputs["colorspace"] = colorspace if class_type == "FromNuke" else ""
+            else:
+                inputs["format"] = video_format
+                inputs["mov_codec"] = video_codec
+                inputs["colorspace"] = video_colorspace if class_type == "FromNukeVideo" else ""
     return patched
