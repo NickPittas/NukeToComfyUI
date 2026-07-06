@@ -64,20 +64,31 @@ def _set_movie_format(write: Any) -> None:
 
 def _set_movie_codec(write: Any, fmt: str, mov_codec: str) -> str:
     if fmt == "mp4":
-        aliases = ("h264", "h.264", "avc", "mpeg4avc", "x264")
-        direct = "h264"
+        codec_aliases = ("H.264", "h264", "h.264", "avc", "mpeg4avc", "x264")
+        profile_aliases = ("High 4:2:0 8-bit", "high4208bit", "high")
+        quality_aliases = ("High",)
     elif mov_codec == "prores_4444":
-        aliases = ("prores4444", "appleprores4444", "ap4h")
-        direct = "ap4h"
+        codec_aliases = ("Apple ProRes", "prores", "appleprores", "ap4h")
+        profile_aliases = ("ProRes 4:4:4:4 12-bit", "prores444412bit", "prores4444")
+        quality_aliases = ()
     else:
-        aliases = ("prores422hq", "appleprores422hq", "proreshq", "apch")
-        direct = "apch"
+        codec_aliases = ("Apple ProRes", "prores", "appleprores", "apch")
+        profile_aliases = ("ProRes 4:2:2 HQ 10-bit", "prores422hq10bit", "prores422hq", "proreshq")
+        quality_aliases = ()
 
-    candidates = list(("codec", "mov_codec", "mov64_codec", "video_codec", "compression", "format", "profile"))
+    codec = _set_first_matching_knob(write, ("Codec", "codec", "mov_codec", "mov64_codec", "video_codec", "compression"), codec_aliases)
+    profile = _set_first_matching_knob(write, ("Codec Profile", "codec_profile", "profile", "mov_profile", "video_profile"), profile_aliases, required=False)
+    quality = _set_first_matching_knob(write, ("Quality", "quality"), quality_aliases, required=False) if quality_aliases else ""
+    return ", ".join(v for v in (codec, profile, quality) if v)
+
+
+def _set_first_matching_knob(write: Any, names: tuple[str, ...], aliases: tuple[str, ...], required: bool = True) -> str:
+    candidates = list(names)
+    wanted = {_norm(name) for name in names}
     try:
         candidates.extend(
             name for name in write.knobs().keys()
-            if any(token in str(name).lower() for token in ("codec", "compression", "profile"))
+            if _norm(name) in wanted
         )
     except Exception:
         pass
@@ -90,11 +101,13 @@ def _set_movie_codec(write: Any, fmt: str, mov_codec: str) -> str:
         try:
             if values:
                 return _set_enum_by_alias(k, aliases)
-            k.setValue(direct)
-            return direct
+            k.setValue(aliases[0])
+            return aliases[0]
         except Exception:
             pass
-    raise RuntimeError(f"could not set video codec for {fmt}/{mov_codec}; codec knobs: {_codec_debug(write)}")
+    if required:
+        raise RuntimeError(f"could not set {names[0]}; codec knobs: {_codec_debug(write)}")
+    return ""
 
 
 def _set_colorspace(write: Any, colorspace: str) -> None:
