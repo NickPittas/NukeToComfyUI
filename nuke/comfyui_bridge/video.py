@@ -24,6 +24,8 @@ def _norm(value: str) -> str:
 
 
 def _set_enum_by_alias(knob: Any, aliases: tuple[str, ...]) -> str:
+    if knob is None:
+        raise RuntimeError(f"missing knob for {aliases!r}")
     values = [str(v) for v in list(knob.values())]
     for alias in aliases:
         a = _norm(alias)
@@ -70,29 +72,45 @@ def _codec_debug(write: Any) -> str:
 
 def _set_movie_format(write: Any) -> None:
     k = write.knob("file_type")
+    if k is not None:
+        _set_enum_by_alias(k, ("mov\t\t\tffmpeg", "mov", "mov64", "movie", "quicktime", "quicktime/mov"))
+    enc = write.knob("meta_encoder")
+    if enc is not None:
+        try:
+            enc.setValue("mov64")
+        except Exception:
+            pass
+
+
+def _set_mov64_format(write: Any, fmt: str) -> None:
+    k = write.knob("mov64_format")
     if k is None:
         return
-    _set_enum_by_alias(k, ("mov", "mov64", "movie", "quicktime", "quicktime/mov"))
+    if fmt == "mp4":
+        _set_enum_by_alias(k, ("mp4 (MP4 (MPEG-4 Part 14))", "mp4"))
+    else:
+        _set_enum_by_alias(k, ("mov (QuickTime / MOV)", "mov"))
 
 
 def _set_movie_codec(write: Any, fmt: str, mov_codec: str) -> str:
-    if fmt == "mp4":
-        codec_aliases = ("H.264", "h264", "h.264", "avc", "mpeg4avc", "x264")
-        profile_aliases = ("High 4:2:0 8-bit", "high4208bit", "high")
-        quality_aliases = ("High",)
-    elif mov_codec == "prores_4444":
-        codec_aliases = ("Apple ProRes", "prores", "appleprores", "ap4h")
-        profile_aliases = ("ProRes 4:4:4:4 12-bit", "prores444412bit", "prores4444")
-        quality_aliases = ()
-    else:
-        codec_aliases = ("Apple ProRes", "prores", "appleprores", "apch")
-        profile_aliases = ("ProRes 4:2:2 HQ 10-bit", "prores422hq10bit", "prores422hq", "proreshq")
-        quality_aliases = ()
+    _set_mov64_format(write, fmt)
+    codec_knob = write.knob("mov64_codec")
+    if codec_knob is None:
+        raise RuntimeError(f"missing mov64_codec knob; codec knobs: {_codec_debug(write)}")
 
-    codec = _set_first_matching_knob(write, ("Codec", "codec", "mov_codec", "mov64_codec", "video_codec", "compression"), codec_aliases)
-    profile = _set_first_matching_knob(write, ("Codec Profile", "codec_profile", "profile", "mov_profile", "video_profile"), profile_aliases, required=False)
-    quality = _set_first_matching_knob(write, ("Quality", "quality"), quality_aliases, required=False) if quality_aliases else ""
-    return ", ".join(v for v in (codec, profile, quality) if v)
+    if fmt == "mp4":
+        codec = _set_enum_by_alias(codec_knob, ("h264\tH.264", "H.264", "h264"))
+        profile = _set_enum_by_alias(write.knob("mov_h264_codec_profile"), ("High 4:2:0 8-bit",))
+        quality = _set_enum_by_alias(write.knob("mov64_quality"), ("High",))
+        return ", ".join((codec, profile, quality))
+    elif mov_codec == "prores_4444":
+        codec = _set_enum_by_alias(codec_knob, ("appr\tApple ProRes", "Apple ProRes", "appr"))
+        profile = _set_enum_by_alias(write.knob("mov_prores_codec_profile"), ("ProRes 4:4:4:4 12-bit",))
+        return ", ".join((codec, profile))
+    else:
+        codec = _set_enum_by_alias(codec_knob, ("appr\tApple ProRes", "Apple ProRes", "appr"))
+        profile = _set_enum_by_alias(write.knob("mov_prores_codec_profile"), ("ProRes 4:2:2 HQ 10-bit",))
+        return ", ".join((codec, profile))
 
 
 def _set_first_matching_knob(write: Any, names: tuple[str, ...], aliases: tuple[str, ...], required: bool = True) -> str:
