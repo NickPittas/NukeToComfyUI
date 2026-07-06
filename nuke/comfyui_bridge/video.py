@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import tempfile
 import time
 import uuid
 from typing import Any, Dict
@@ -13,10 +12,6 @@ from . import napi
 
 VIDEO_FORMATS = ("mov", "mp4")
 MOV_CODECS = ("prores_422hq", "prores_4444")
-
-
-def _tmp_path(suffix: str) -> str:
-    return tempfile.NamedTemporaryFile(prefix="comfyui_bridge_video_", suffix=suffix, delete=False).name
 
 
 def _norm(value: str) -> str:
@@ -213,12 +208,12 @@ def _mask_chain(nuke: Any, bridge_node: Any, mask_source: str, temp_nodes: list[
     return _expr_mask(nuke, src, "0", temp_nodes)
 
 
-def export_video_bundle(bridge_node: Any, frame_start: int, frame_end: int, fps: float, fmt: str, mov_codec: str, colorspace: str) -> Dict[str, Any]:
+def export_video_bundle(bridge_node: Any, output_directory: str, frame_start: int, frame_end: int, fps: float, fmt: str, mov_codec: str, colorspace: str) -> Dict[str, Any]:
     fmt = fmt if fmt in VIDEO_FORMATS else "mov"
     mov_codec = mov_codec if mov_codec in MOV_CODECS else "prores_422hq"
     suffix = ".mov" if fmt == "mov" else ".mp4"
-    main_path = _tmp_path(suffix)
-    mask_path = _tmp_path(".mov")
+    main_path = _unique_path(output_directory, "nuke_bridge_source", suffix.lstrip("."))
+    mask_path = _unique_path(output_directory, "nuke_bridge_mask", "mov")
     nuke: Any = napi._nuke
 
     def _export() -> Dict[str, Any]:
@@ -257,7 +252,7 @@ def export_video_bundle(bridge_node: Any, frame_start: int, frame_end: int, fps:
 def _unique_path(output_directory: str, prefix: str, ext: str) -> str:
     os.makedirs(output_directory, exist_ok=True)
     stamp = time.strftime("%Y%m%d_%H%M%S")
-    return os.path.join(output_directory, f"{prefix}_{stamp}_{os.getpid()}.{ext}")
+    return os.path.join(output_directory, f"{prefix}_{stamp}_{os.getpid()}_{uuid.uuid4().hex[:8]}.{ext}")
 
 
 def save_video_result(body: bytes, output_directory: str, filename_prefix: str, fmt: str, frame_start: int, frame_end: int, colorspace: str, bridge_node: Any, create_read: bool) -> str:

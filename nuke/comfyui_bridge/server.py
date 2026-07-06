@@ -352,7 +352,9 @@ class _BridgeHandler(BaseHTTPRequestHandler):
                 fmt = str(req.get("format") or napi.knob_value(node, "video_format") or "mov").lower()
                 mov_codec = str(req.get("mov_codec") or napi.knob_value(node, "video_mov_codec") or "prores_422hq").lower()
                 colorspace = self._clean_colorspace(req.get("colorspace") or napi.knob_value(node, "video_colorspace"))
-                bundle = video.export_video_bundle(node, first, last, fps, fmt, mov_codec, colorspace)
+                srv = get_server()
+                output_dir = str(napi.knob_value(node, "output_directory") or (srv.settings if srv else load_settings()).get("output_directory") or DEFAULT_SETTINGS["output_directory"])
+                bundle = video.export_video_bundle(node, output_dir, first, last, fps, fmt, mov_codec, colorspace)
             except Exception as exc:
                 _json_response(self, 500, {"ok": False, "error": repr(exc)})
                 return
