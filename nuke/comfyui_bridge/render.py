@@ -39,13 +39,35 @@ def clear_cache() -> None:
 
 
 def clear_cache_from_node(bridge_node: Any = None) -> None:
-    """PyScript_Knob entrypoint: clear cached frame exports."""
+    """PyScript_Knob entrypoint: clear cached frame/video exports."""
     clear_cache()
+    removed = _clear_video_exports(bridge_node) if bridge_node is not None else 0
     if bridge_node is not None:
         try:
-            napi.set_knob_value(bridge_node, "status", "frame cache cleared")
+            msg = "frame cache cleared"
+            if removed:
+                msg += f"; removed {removed} video file(s)"
+            napi.set_knob_value(bridge_node, "status", msg)
         except Exception:
             pass
+
+
+def _clear_video_exports(bridge_node: Any) -> int:
+    output_dir = str(napi.knob_value(bridge_node, "output_directory") or "")
+    if not output_dir or not os.path.isdir(output_dir):
+        return 0
+    removed = 0
+    for name in os.listdir(output_dir):
+        if not name.startswith(("nuke_bridge_source_", "nuke_bridge_mask_")):
+            continue
+        if not name.lower().endswith((".mov", ".mp4")):
+            continue
+        try:
+            os.remove(os.path.join(output_dir, name))
+            removed += 1
+        except OSError:
+            pass
+    return removed
 
 
 def _cache_get(key: tuple) -> Optional[Tuple[bytes, int, int]]:
