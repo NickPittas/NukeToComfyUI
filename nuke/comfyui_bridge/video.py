@@ -35,6 +35,26 @@ def _set_enum_by_alias(knob: Any, aliases: tuple[str, ...]) -> str:
     raise RuntimeError(f"could not match {aliases!r}; available: {values!r}")
 
 
+def _knob_values(knob: Any) -> list[str]:
+    try:
+        return [str(v) for v in list(knob.values())]
+    except Exception:
+        return []
+
+
+def _codec_debug(write: Any) -> str:
+    found = []
+    try:
+        items = write.knobs().items()
+    except Exception:
+        items = []
+    for name, knob in items:
+        lname = str(name).lower()
+        if any(token in lname for token in ("codec", "compression", "profile", "format")):
+            found.append(f"{name}={_knob_values(knob)!r}")
+    return "; ".join(found)
+
+
 def _set_movie_format(write: Any) -> None:
     k = write.knob("file_type")
     if k is None:
@@ -44,20 +64,37 @@ def _set_movie_format(write: Any) -> None:
 
 def _set_movie_codec(write: Any, fmt: str, mov_codec: str) -> str:
     if fmt == "mp4":
-        aliases = ("h264", "h.264", "avc", "mpeg4avc")
+        aliases = ("h264", "h.264", "avc", "mpeg4avc", "x264")
+        direct = "h264"
     elif mov_codec == "prores_4444":
         aliases = ("prores4444", "appleprores4444", "ap4h")
+        direct = "ap4h"
     else:
-        aliases = ("prores422hq", "appleprores422hq", "apch")
-    for name in ("codec", "mov_codec", "mov64_codec", "video_codec", "compression"):
+        aliases = ("prores422hq", "appleprores422hq", "proreshq", "apch")
+        direct = "apch"
+
+    candidates = list(("codec", "mov_codec", "mov64_codec", "video_codec", "compression", "format", "profile"))
+    try:
+        candidates.extend(
+            name for name in write.knobs().keys()
+            if any(token in str(name).lower() for token in ("codec", "compression", "profile"))
+        )
+    except Exception:
+        pass
+
+    for name in dict.fromkeys(candidates):
         k = write.knob(name)
         if k is None:
             continue
+        values = _knob_values(k)
         try:
-            return _set_enum_by_alias(k, aliases)
+            if values:
+                return _set_enum_by_alias(k, aliases)
+            k.setValue(direct)
+            return direct
         except Exception:
             pass
-    raise RuntimeError(f"could not set video codec for {fmt}/{mov_codec}")
+    raise RuntimeError(f"could not set video codec for {fmt}/{mov_codec}; codec knobs: {_codec_debug(write)}")
 
 
 def _set_colorspace(write: Any, colorspace: str) -> None:
@@ -140,7 +177,7 @@ def export_video_bundle(bridge_node: Any, frame_start: int, frame_end: int, fps:
             _write_movie(nuke, src, main_path, frame_start, frame_end, fmt, mov_codec, colorspace)
             mask_source = str(napi.knob_value(bridge_node, "mask_source") or "source alpha")
             mask_node = _mask_chain(nuke, bridge_node, mask_source, temp_nodes)
-            _write_movie(nuke, mask_node, mask_path, frame_start, frame_end, "mp4", "prores_422hq", "")
+            _write_movie(nuke, mask_node, mask_path, frame_start, frame_end, "mp4", "h264", "")
             f = src.format()
             return {"width": int(f.width()), "height": int(f.height())}
         finally:
