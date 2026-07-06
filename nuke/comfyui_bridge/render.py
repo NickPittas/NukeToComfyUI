@@ -57,10 +57,17 @@ def _clear_video_exports(bridge_node: Any) -> int:
     if not output_dir or not os.path.isdir(output_dir):
         return 0
     removed = 0
+    prefixes = (
+        "nuke_bridge_source_",
+        "nuke_bridge_mask_",
+        "comfy_result",
+        "comfy_video_result",
+    )
+    exts = (".mov", ".mp4", ".png", ".exr")
     for name in os.listdir(output_dir):
-        if not name.startswith(("nuke_bridge_source_", "nuke_bridge_mask_")):
+        if not name.startswith(prefixes):
             continue
-        if not name.lower().endswith((".mov", ".mp4")):
+        if not name.lower().endswith(exts):
             continue
         try:
             os.remove(os.path.join(output_dir, name))
