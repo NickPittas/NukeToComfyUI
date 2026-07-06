@@ -12,6 +12,7 @@ in-process dict keyed by `bridge_id` (refreshed on every `refresh_workflow_choic
 from __future__ import annotations
 
 import uuid
+import copy
 import json
 import threading
 import urllib.error
@@ -181,6 +182,7 @@ def _run_selected_workflow_sync(bridge_node: Any, timeout: float = 30.0) -> Opti
     if not prompt:
         napi.set_knob_value(bridge_node, "status", f"run: no prompt for {wid}")
         return None
+    prompt = _patch_nuke_bridge_prompt(prompt, bridge_node)
 
     from . import comfy_progress
     cid = data.get("client_id") or client_id
@@ -195,3 +197,23 @@ def _run_selected_workflow_sync(bridge_node: Any, timeout: float = 30.0) -> Opti
     label = prompt_id or "(no prompt_id)"
     napi.set_knob_value(bridge_node, "status", f"workflow {status}: {label}")
     return {"client_id": cid, "prompt_id": prompt_id, "status": status}
+
+
+def _patch_nuke_bridge_prompt(prompt: Any, bridge_node: Any) -> Any:
+    """Apply Nuke-side bridge settings to FromNuke/ToNuke nodes before submit."""
+    from . import napi
+
+    fmt = str(napi.knob_value(bridge_node, "send_format") or "png8").strip().lower()
+    if fmt not in ("png8", "exr16"):
+        fmt = "png8"
+
+    patched = copy.deepcopy(prompt)
+    for node in (patched or {}).values() if isinstance(patched, dict) else []:
+        if not isinstance(node, dict):
+            continue
+        if node.get("class_type") not in ("FromNuke", "ToNuke"):
+            continue
+        inputs = node.get("inputs")
+        if isinstance(inputs, dict):
+            inputs["format"] = fmt
+    return patched
