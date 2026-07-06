@@ -158,20 +158,14 @@ def ensure_knobs(node: Any) -> None:
 
 
 def write_colorspaces(nuke: Any) -> List[str]:
-    """Return the current Nuke Write node colorspace dropdown values."""
-    write = None
+    """Return available Nuke OCIO colorspaces without creating graph nodes."""
     try:
-        write = nuke.nodes.Write(inpanel=False)
-        values = list(write.knob("colorspace").values())
-        return [str(v) for v in values if str(v)] or list(SEND_COLORSPACES)
+        values = list(nuke.getOcioColorSpaces())
+        if values:
+            return [str(v) for v in values if str(v)]
     except Exception:
-        return list(SEND_COLORSPACES)
-    finally:
-        if write is not None:
-            try:
-                nuke.delete(write)
-            except Exception:
-                pass
+        pass
+    return list(SEND_COLORSPACES)
 
 
 def refresh_colorspace_choices(node: Any) -> None:
