@@ -32,7 +32,7 @@ MASK_SOURCES = (
     "invert mask input",
 )
 SEND_FORMATS = ("png8", "exr16")  # Phase 2: half-float EXR transport
-SEND_COLORSPACES = ("raw", "sRGB")
+SEND_COLORSPACES = ("linear", "sRGB", "rec709")
 
 
 def _new_bridge_id() -> str:
@@ -82,7 +82,7 @@ def _knob_specs() -> List[Tuple[str, Callable[[Any], Any]]]:
         ("prompt", lambda n: _multiline_or_string(n, "prompt", "prompt")),
         ("mask_source", lambda n: n.Enumeration_Knob("mask_source", "mask_source", list(MASK_SOURCES))),
         ("send_format", lambda n: n.Enumeration_Knob("send_format", "send_format", list(SEND_FORMATS))),
-        ("send_colorspace", lambda n: n.Enumeration_Knob("send_colorspace", "send_colorspace", list(SEND_COLORSPACES))),
+        ("send_colorspace", lambda n: n.Enumeration_Knob("send_colorspace", "send_colorspace", write_colorspaces(n))),
         ("workflow_choices", lambda n: n.Enumeration_Knob("workflow_choices", "workflow", ["(none)"])),
         ("create_read_on_result", lambda n: n.Boolean_Knob("create_read_on_result", "create_read_on_result")),
         ("status", lambda n: n.String_Knob("status", "status")),
@@ -157,6 +157,41 @@ def ensure_knobs(node: Any) -> None:
             pass
 
 
+def write_colorspaces(nuke: Any) -> List[str]:
+    """Return the current Nuke Write node colorspace dropdown values."""
+    write = None
+    try:
+        write = nuke.nodes.Write(inpanel=False)
+        values = list(write.knob("colorspace").values())
+        return [str(v) for v in values if str(v)] or list(SEND_COLORSPACES)
+    except Exception:
+        return list(SEND_COLORSPACES)
+    finally:
+        if write is not None:
+            try:
+                nuke.delete(write)
+            except Exception:
+                pass
+
+
+def refresh_colorspace_choices(node: Any) -> None:
+    """Keep the bridge dropdown aligned with the current Nuke OCIO config."""
+    if not napi.has_nuke():
+        return
+    nuke: Any = napi._nuke
+    try:
+        k = node.knob("send_colorspace")
+        if k is None:
+            return
+        current = str(k.value() or "")
+        values = write_colorspaces(nuke)
+        k.setValues(values)
+        if current in values:
+            k.setValue(current)
+    except Exception:
+        pass
+
+
 def initialize_defaults(node: Any) -> None:
     """Fill empty dynamic defaults: bridge_id, host/port, output_directory,
     comfyui host/port, create_read_on_result, status.
@@ -167,6 +202,7 @@ def initialize_defaults(node: Any) -> None:
     if not napi.has_nuke():
         return
     settings = load_settings()
+    refresh_colorspace_choices(node)
 
     def _str(name: str, value: str) -> None:
         try:

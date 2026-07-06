@@ -109,7 +109,13 @@ def _resolve_frame(requested: int) -> int:
     return int(requested)
 
 
-def _write_png(nuke: Any, src_node: Any, tmp_path: str, frame: int, temp_nodes: list) -> None:
+def _set_write_colorspace(write: Any, colorspace: str) -> None:
+    if not colorspace:
+        return
+    write.knob("colorspace").setValue(str(colorspace))
+
+
+def _write_png(nuke: Any, src_node: Any, tmp_path: str, frame: int, temp_nodes: list, colorspace: str = "") -> None:
     """Render `src_node` to PNG (RGBA when available) at `frame`."""
     write = nuke.nodes.Write(inputs=[src_node])
     temp_nodes.append(write)
@@ -122,10 +128,11 @@ def _write_png(nuke: Any, src_node: Any, tmp_path: str, frame: int, temp_nodes: 
         write.knob("channels").setValue("rgba")
     except Exception:
         pass
+    _set_write_colorspace(write, colorspace)
     nuke.execute(write, frame, frame)
 
 
-def _write_exr(nuke: Any, src_node: Any, tmp_path: str, frame: int, temp_nodes: list) -> None:
+def _write_exr(nuke: Any, src_node: Any, tmp_path: str, frame: int, temp_nodes: list, colorspace: str = "") -> None:
     """Render `src_node` to half-float RGBA EXR at `frame`.
 
     Nuke Write knob names vary slightly across versions; we try the common
@@ -151,6 +158,7 @@ def _write_exr(nuke: Any, src_node: Any, tmp_path: str, frame: int, temp_nodes: 
         write.knob("channels").setValue("rgba")
     except Exception:
         pass
+    _set_write_colorspace(write, colorspace)
     nuke.execute(write, frame, frame)
 
 
@@ -252,19 +260,7 @@ def render_frame_png(
                     temp_nodes.append(inv)
                     chain = inv
 
-                if colorspace == "sRGB":
-                    # ponytail: explicit sRGB write via Colorspace node if
-                    # available, else rely on Write colorspace; minimal.
-                    cs = nuke.nodes.Colorspace(inputs=[chain])
-                    temp_nodes.append(cs)
-                    try:
-                        cs.knob("colorspace_in").setValue("raw")
-                        cs.knob("colorspace_out").setValue("sRGB")
-                    except Exception:
-                        pass
-                    chain = cs
-
-                _write_png(nuke, chain, src_path, frame, temp_nodes)
+                _write_png(nuke, chain, src_path, frame, temp_nodes, colorspace)
                 fmt = src.format()
                 width, height = int(fmt.width()), int(fmt.height())
 
@@ -276,7 +272,7 @@ def render_frame_png(
                             prefix="comfyui_bridge_mask_", suffix=".png", delete=False
                         ).name
                         try:
-                            _write_png(nuke, mask_input, mask_path, frame, temp_nodes)
+                            _write_png(nuke, mask_input, mask_path, frame, temp_nodes, colorspace)
                             with open(mask_path, "rb") as fh:
                                 mask_png = fh.read()
                         finally:
@@ -362,17 +358,7 @@ def render_frame_exr(
                     temp_nodes.append(inv)
                     chain = inv
 
-                if colorspace == "sRGB":
-                    cs = nuke.nodes.Colorspace(inputs=[chain])
-                    temp_nodes.append(cs)
-                    try:
-                        cs.knob("colorspace_in").setValue("raw")
-                        cs.knob("colorspace_out").setValue("sRGB")
-                    except Exception:
-                        pass
-                    chain = cs
-
-                _write_exr(nuke, chain, src_path, frame, temp_nodes)
+                _write_exr(nuke, chain, src_path, frame, temp_nodes, colorspace)
                 fmt = src.format()
                 width, height = int(fmt.width()), int(fmt.height())
 

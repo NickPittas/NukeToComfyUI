@@ -38,6 +38,7 @@ class FromNuke:
                 "port": ("INT", {"default": 8765, "min": 1, "max": 65535}),
                 "frame": ("INT", {"default": -1, "min": -1, "max": 2**31 - 1}),
                 "format": (["png8", "exr16"], {"default": "png8"}),
+                "colorspace": ("STRING", {"default": "", "multiline": False}),
                 "timeout": ("FLOAT", {"default": 30.0, "min": 1.0, "max": 600.0}),
             },
             "optional": {},
@@ -55,12 +56,13 @@ class FromNuke:
         port: int,
         frame: int,
         format: str,
+        colorspace: str,
         timeout: float,
     ) -> Tuple[torch.Tensor, torch.Tensor, str, int, int]:
         url = f"{_base_url(host, port)}/bridge/{_bridge_path_id(bridge_id)}/frame"
         resp = requests.post(
             url,
-            json={"frame": int(frame), "format": _format_value(format)},
+            json={"frame": int(frame), "format": _format_value(format), "colorspace": colorspace or ""},
             timeout=float(timeout),
         )
         if resp.status_code != 200:
@@ -105,6 +107,7 @@ class ToNuke:
                 "port": ("INT", {"default": 8765, "min": 1, "max": 65535}),
                 "filename_prefix": ("STRING", {"default": "comfy_result"}),
                 "format": (["png8", "exr16"], {"default": "png8"}),
+                "colorspace": ("STRING", {"default": "", "multiline": False}),
                 "timeout": ("FLOAT", {"default": 30.0, "min": 1.0, "max": 600.0}),
             }
         }
@@ -123,6 +126,7 @@ class ToNuke:
         port: int,
         filename_prefix: str,
         format: str,
+        colorspace: str,
         timeout: float,
     ) -> Tuple[torch.Tensor]:
         body, content_type, fmt_tag = image_io.encode_image_bytes(image, _format_value(format))
@@ -132,7 +136,7 @@ class ToNuke:
             "X-NukeBridge-Filename-Prefix": filename_prefix or "comfy_result",
             "X-NukeBridge-Frame": "-1",
             "X-NukeBridge-Format": fmt_tag,
-            "X-NukeBridge-Colorspace": "raw" if fmt_tag == "exr16" else "sRGB",
+            "X-NukeBridge-Colorspace": colorspace or "",
         }
         resp = requests.post(url, data=body, headers=headers, timeout=float(timeout))
         if resp.status_code != 200:

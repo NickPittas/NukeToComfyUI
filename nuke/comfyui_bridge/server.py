@@ -199,7 +199,7 @@ class _BridgeHandler(BaseHTTPRequestHandler):
                     )
                     return
                 mask_source = str(napi.knob_value(node, "mask_source") or "source alpha")
-                cs = str(requested_colorspace or napi.knob_value(node, "send_colorspace") or "raw")
+                cs = str(requested_colorspace or napi.knob_value(node, "send_colorspace") or "")
                 fmt = str(
                     requested_format or napi.knob_value(node, "send_format") or "png8"
                 )
@@ -234,7 +234,7 @@ class _BridgeHandler(BaseHTTPRequestHandler):
     def _handle_result(self, bridge_id: str) -> None:
         body = self._read_body()
         prefix = self.headers.get("X-NukeBridge-Filename-Prefix") or "comfy_result"
-        colorspace = self.headers.get("X-NukeBridge-Colorspace") or "sRGB"
+        colorspace = self.headers.get("X-NukeBridge-Colorspace") or ""
         fmt = (self.headers.get("X-NukeBridge-Format") or "png8").strip().lower()
         ext = "exr" if fmt == "exr16" else "png"
 
@@ -250,6 +250,8 @@ class _BridgeHandler(BaseHTTPRequestHandler):
                 node, _ = self._resolve_bridge_node(bridge_id)
                 if node is not None:
                     create_read = bool(napi.knob_value(node, "create_read_on_result"))
+                    if not colorspace:
+                        colorspace = str(napi.knob_value(node, "send_colorspace") or "")
             except Exception:
                 pass
 

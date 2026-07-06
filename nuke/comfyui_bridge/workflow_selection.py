@@ -206,6 +206,7 @@ def _patch_nuke_bridge_prompt(prompt: Any, bridge_node: Any) -> Any:
     fmt = str(napi.knob_value(bridge_node, "send_format") or "png8").strip().lower()
     if fmt not in ("png8", "exr16"):
         fmt = "png8"
+    colorspace = str(napi.knob_value(bridge_node, "send_colorspace") or "")
 
     patched = copy.deepcopy(prompt)
     for node in (patched or {}).values() if isinstance(patched, dict) else []:
@@ -216,4 +217,5 @@ def _patch_nuke_bridge_prompt(prompt: Any, bridge_node: Any) -> Any:
         inputs = node.get("inputs")
         if isinstance(inputs, dict):
             inputs["format"] = fmt
+            inputs["colorspace"] = colorspace
     return patched
