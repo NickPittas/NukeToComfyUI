@@ -10,7 +10,7 @@ from typing import Any, Dict
 from . import napi
 
 
-VIDEO_FORMATS = ("mov",)
+VIDEO_FORMATS = ("mov", "mp4")
 MOV_CODECS = ("prores_422hq", "prores_4444")
 
 
@@ -209,7 +209,7 @@ def _mask_chain(nuke: Any, bridge_node: Any, mask_source: str, temp_nodes: list[
 
 
 def export_video_bundle(bridge_node: Any, output_directory: str, frame_start: int, frame_end: int, fps: float, fmt: str, mov_codec: str, colorspace: str) -> Dict[str, Any]:
-    fmt = "mov"
+    fmt = fmt if fmt in VIDEO_FORMATS else "mov"
     mov_codec = mov_codec if mov_codec in MOV_CODECS else "prores_422hq"
     suffix = ".mov" if fmt == "mov" else ".mp4"
     main_path = _unique_path(output_directory, "nuke_bridge_source", suffix.lstrip("."))

@@ -178,7 +178,7 @@ class FromNukeVideo:
             "frame_start": ("INT", {"default": -1, "min": -1, "max": 2**31 - 1}),
             "frame_end": ("INT", {"default": -1, "min": -1, "max": 2**31 - 1}),
             "fps": ("FLOAT", {"default": 24.0, "min": 1.0, "max": 240.0}),
-            "format": (["mov"], {"default": "mov"}),
+            "format": (["mov", "mp4"], {"default": "mov"}),
             "mov_codec": (["prores_422hq", "prores_4444"], {"default": "prores_422hq"}),
             "colorspace": ("STRING", {"default": "", "multiline": False}),
             "timeout": ("FLOAT", {"default": 120.0, "min": 1.0, "max": 3600.0}),

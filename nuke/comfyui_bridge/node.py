@@ -32,7 +32,7 @@ MASK_SOURCES = (
     "invert mask input",
 )
 SEND_FORMATS = ("png8", "exr16")  # Phase 2: half-float EXR transport
-VIDEO_FORMATS = ("mov",)
+VIDEO_FORMATS = ("mov", "mp4")
 VIDEO_MOV_CODECS = ("prores_422hq", "prores_4444")
 
 

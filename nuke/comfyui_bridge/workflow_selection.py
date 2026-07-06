@@ -207,7 +207,9 @@ def _patch_nuke_bridge_prompt(prompt: Any, bridge_node: Any) -> Any:
     if fmt not in ("png8", "exr16"):
         fmt = "png8"
     colorspace = str(napi.knob_value(bridge_node, "send_colorspace") or "")
-    video_format = "mov"
+    video_format = str(napi.knob_value(bridge_node, "video_format") or "mov").strip().lower()
+    if video_format not in ("mov", "mp4"):
+        video_format = "mov"
     video_codec = str(napi.knob_value(bridge_node, "video_mov_codec") or "prores_422hq").strip().lower()
     if video_codec not in ("prores_422hq", "prores_4444"):
         video_codec = "prores_422hq"
