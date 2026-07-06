@@ -96,21 +96,6 @@ def _knob_specs() -> List[Tuple[str, Callable[[Any], Any]]]:
         ("create_read_on_result", lambda n: n.Boolean_Knob("create_read_on_result", "create_read_on_result")),
         ("status", lambda n: n.String_Knob("status", "status")),
         ("last_result", lambda n: n.String_Knob("last_result", "last_result")),
-        ("Video", lambda n: n.Tab_Knob("Video")),
-        ("video_format", lambda n: n.Enumeration_Knob("video_format", "video_format", list(VIDEO_FORMATS))),
-        ("video_mov_codec", lambda n: n.Enumeration_Knob("video_mov_codec", "mov codec", list(VIDEO_MOV_CODECS))),
-        ("video_first", lambda n: n.Int_Knob("video_first", "first")),
-        ("video_last", lambda n: n.Int_Knob("video_last", "last")),
-        ("video_fps", lambda n: n.Double_Knob("video_fps", "fps")),
-        ("video_colorspace", lambda n: n.Enumeration_Knob("video_colorspace", "video colorspace", [])),
-        (
-            "refresh_video_colorspaces",
-            lambda n: _pyscript(
-                n, "refresh_video_colorspaces", "Refresh video colorspaces",
-                "from comfyui_bridge import node; "
-                "node.refresh_video_colorspace_choices(nuke.thisNode())",
-            ),
-        ),
         (
             "save_defaults",
             lambda n: _pyscript(
@@ -141,6 +126,21 @@ def _knob_specs() -> List[Tuple[str, Callable[[Any], Any]]]:
                 n, "run_selected_workflow", "Run selected workflow",
                 "from comfyui_bridge import workflow_selection; "
                 "workflow_selection.run_selected_workflow(nuke.thisNode())",
+            ),
+        ),
+        ("Video", lambda n: n.Tab_Knob("Video")),
+        ("video_format", lambda n: n.Enumeration_Knob("video_format", "video_format", list(VIDEO_FORMATS))),
+        ("video_mov_codec", lambda n: n.Enumeration_Knob("video_mov_codec", "mov codec", list(VIDEO_MOV_CODECS))),
+        ("video_first", lambda n: n.Int_Knob("video_first", "first")),
+        ("video_last", lambda n: n.Int_Knob("video_last", "last")),
+        ("video_fps", lambda n: n.Double_Knob("video_fps", "fps")),
+        ("video_colorspace", lambda n: n.Enumeration_Knob("video_colorspace", "video colorspace", [])),
+        (
+            "refresh_video_colorspaces",
+            lambda n: _pyscript(
+                n, "refresh_video_colorspaces", "Refresh video colorspaces",
+                "from comfyui_bridge import node; "
+                "node.refresh_video_colorspace_choices(nuke.thisNode())",
             ),
         ),
     ]
