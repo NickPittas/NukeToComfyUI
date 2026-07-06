@@ -74,6 +74,10 @@ def _set_movie_format(write: Any) -> None:
     k = write.knob("file_type")
     if k is not None:
         _set_enum_by_alias(k, ("mov\t\t\tffmpeg", "mov", "mov64", "movie", "quicktime", "quicktime/mov"))
+        try:
+            k.setValue("mov")
+        except Exception:
+            pass
     enc = write.knob("meta_encoder")
     if enc is not None:
         try:
@@ -159,8 +163,9 @@ def _set_colorspace(write: Any, colorspace: str) -> None:
 
 
 def _write_movie(nuke: Any, input_node: Any, path: str, first: int, last: int, fmt: str, mov_codec: str, colorspace: str) -> None:
-    write = nuke.nodes.Write(inputs=[input_node])
+    write = nuke.createNode("Write", "", inpanel=False)
     try:
+        write.setInput(0, input_node)
         write.knob("file").setValue(path)
         try:
             write.knob("channels").setValue("rgb")
