@@ -182,6 +182,10 @@ class FromNukeVideo:
             "mov_codec": (["prores_422hq", "prores_4444"], {"default": "prores_422hq"}),
             "colorspace": ("STRING", {"default": "", "multiline": False}),
             "timeout": ("FLOAT", {"default": 120.0, "min": 1.0, "max": 3600.0}),
+        }, "optional": {
+            "main_path": ("STRING", {"default": "", "multiline": False}),
+            "mask_path": ("STRING", {"default": "", "multiline": False}),
+            "metadata_json": ("STRING", {"default": "{}", "multiline": True}),
         }}
 
     RETURN_TYPES = ("IMAGE", "MASK", "STRING", "INT", "INT", "INT", "FLOAT")
@@ -189,27 +193,15 @@ class FromNukeVideo:
     FUNCTION = "pull"
     CATEGORY = "NukeBridge"
 
-    def pull(self, bridge_id: str, host: str, port: int, frame_start: int, frame_end: int, fps: float, format: str, mov_codec: str, colorspace: str, timeout: float):
-        url = f"{_base_url(host, port)}/bridge/{_bridge_path_id(bridge_id)}/video"
-        req = {
-            "frame_start": int(frame_start), "frame_end": int(frame_end), "fps": float(fps),
-            "format": format, "mov_codec": mov_codec, "colorspace": _colorspace_value(colorspace),
-        }
-        resp = requests.post(url, json=req, timeout=float(timeout))
-        if resp.status_code != 200:
-            raise RuntimeError(f"FromNukeVideo: Nuke /video returned {resp.status_code}: {resp.text[:300]}")
-        data = resp.json()
-        meta = data.get("metadata") or {}
-        with tempfile.TemporaryDirectory(prefix="nuke_bridge_video_") as tmp:
-            main_path = os.path.join(tmp, "main.mov" if meta.get("format") == "mov" else "main.mp4")
-            mask_path = os.path.join(tmp, "mask.mov")
-            for url_key, path in (("main_url", main_path), ("mask_url", mask_path)):
-                r = requests.get(data[url_key], timeout=float(timeout))
-                if r.status_code != 200:
-                    raise RuntimeError(f"FromNukeVideo: download failed {r.status_code}: {data[url_key]}")
-                with open(path, "wb") as fh:
-                    fh.write(r.content)
-            image, mask, width, height, frame_count = video_io.decode_video(main_path, mask_path)
+    def pull(self, bridge_id: str, host: str, port: int, frame_start: int, frame_end: int, fps: float, format: str, mov_codec: str, colorspace: str, timeout: float, main_path: str = "", mask_path: str = "", metadata_json: str = "{}"):
+        if not main_path or not mask_path:
+            raise RuntimeError("FromNukeVideo: Nuke did not inject rendered video paths")
+        if not os.path.isfile(main_path):
+            raise RuntimeError(f"FromNukeVideo: missing main_path {main_path!r}")
+        if not os.path.isfile(mask_path):
+            raise RuntimeError(f"FromNukeVideo: missing mask_path {mask_path!r}")
+        meta = json.loads(metadata_json or "{}")
+        image, mask, width, height, frame_count = video_io.decode_video(main_path, mask_path)
         return image, mask, json.dumps(meta), width, height, frame_count, float(meta.get("fps") or fps)
 
 

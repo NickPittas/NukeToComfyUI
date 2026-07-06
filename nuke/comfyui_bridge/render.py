@@ -41,6 +41,11 @@ def clear_cache() -> None:
 def clear_cache_from_node(bridge_node: Any = None) -> None:
     """PyScript_Knob entrypoint: clear cached frame/video exports."""
     clear_cache()
+    try:
+        from . import video
+        video.clear_cache()
+    except Exception:
+        pass
     removed = _clear_video_exports(bridge_node) if bridge_node is not None else 0
     if bridge_node is not None:
         try:

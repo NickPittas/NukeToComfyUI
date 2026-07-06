@@ -12,6 +12,11 @@ from . import napi
 
 VIDEO_FORMATS = ("mov", "mp4")
 MOV_CODECS = ("prores_422hq", "prores_4444")
+_VIDEO_CACHE: dict[tuple, Dict[str, Any]] = {}
+
+
+def clear_cache() -> None:
+    _VIDEO_CACHE.clear()
 
 
 def _norm(value: str) -> str:
@@ -69,6 +74,10 @@ def _set_movie_format(write: Any) -> None:
     k = write.knob("file_type")
     if k is not None:
         _set_enum_by_alias(k, ("mov\t\t\tffmpeg", "mov", "mov64", "movie", "quicktime", "quicktime/mov"))
+        try:
+            k.setValue("mov")
+        except Exception:
+            pass
     enc = write.knob("meta_encoder")
     if enc is not None:
         try:
@@ -204,12 +213,54 @@ def _mask_chain(nuke: Any, bridge_node: Any, mask_source: str, temp_nodes: list[
     return _expr_mask(nuke, src, "0", temp_nodes)
 
 
+def _node_name(node: Any) -> str:
+    if node is None:
+        return ""
+    for name in ("fullName", "name"):
+        fn = getattr(node, name, None)
+        if callable(fn):
+            try:
+                return str(fn())
+            except Exception:
+                pass
+    return str(node)
+
+
+def _cache_key(bridge_node: Any, frame_start: int, frame_end: int, fps: float, fmt: str, mov_codec: str, colorspace: str) -> tuple:
+    def _build() -> tuple:
+        return (
+            str(napi.knob_value(bridge_node, "bridge_id") or ""),
+            _node_name(bridge_node.input(0)),
+            _node_name(bridge_node.input(1)),
+            str(napi.knob_value(bridge_node, "mask_source") or "source alpha"),
+            int(frame_start),
+            int(frame_end),
+            float(fps),
+            str(fmt),
+            str(mov_codec),
+            str(colorspace or ""),
+        )
+    return napi.call(_build)
+
+
+def _valid_bundle(bundle: Dict[str, Any]) -> bool:
+    for key in ("main_path", "mask_path"):
+        path = str(bundle.get(key) or "")
+        if not path or not os.path.isfile(path) or os.path.getsize(path) <= 0:
+            return False
+    return True
+
+
 def export_video_bundle(bridge_node: Any, output_directory: str, frame_start: int, frame_end: int, fps: float, fmt: str, mov_codec: str, colorspace: str) -> Dict[str, Any]:
     fmt = fmt if fmt in VIDEO_FORMATS else "mov"
     mov_codec = mov_codec if mov_codec in MOV_CODECS else "prores_422hq"
+    key = _cache_key(bridge_node, frame_start, frame_end, fps, fmt, mov_codec, colorspace)
+    cached = _VIDEO_CACHE.get(key)
+    if cached and _valid_bundle(cached):
+        return cached
     suffix = ".mov" if fmt == "mov" else ".mp4"
     main_path = _unique_path(output_directory, "nuke_bridge_source", suffix.lstrip("."))
-    mask_path = _unique_path(output_directory, "nuke_bridge_mask", "mov")
+    mask_path = _unique_path(output_directory, "nuke_bridge_mask", "mp4")
     nuke: Any = napi._nuke
 
     def _export() -> Dict[str, Any]:
@@ -221,7 +272,7 @@ def export_video_bundle(bridge_node: Any, output_directory: str, frame_start: in
             _write_movie(nuke, src, main_path, frame_start, frame_end, fmt, mov_codec, colorspace)
             mask_source = str(napi.knob_value(bridge_node, "mask_source") or "source alpha")
             mask_node = _mask_chain(nuke, bridge_node, mask_source, temp_nodes)
-            _write_movie(nuke, mask_node, mask_path, frame_start, frame_end, "mov", "prores_422hq", "")
+            _write_movie(nuke, mask_node, mask_path, frame_start, frame_end, "mp4", "prores_422hq", "")
             f = src.format()
             return {"width": int(f.width()), "height": int(f.height())}
         finally:
@@ -242,7 +293,9 @@ def export_video_bundle(bridge_node: Any, output_directory: str, frame_start: in
         "colorspace": str(colorspace or ""),
         "mask_convention": "white=masked",
     })
-    return {"main_path": main_path, "mask_path": mask_path, "metadata": meta}
+    bundle = {"main_path": main_path, "mask_path": mask_path, "metadata": meta}
+    _VIDEO_CACHE[key] = bundle
+    return bundle
 
 
 def _unique_path(output_directory: str, prefix: str, ext: str) -> str:

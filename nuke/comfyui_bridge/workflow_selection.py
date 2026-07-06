@@ -14,6 +14,7 @@ from __future__ import annotations
 import uuid
 import copy
 import json
+import os
 import threading
 import urllib.error
 import urllib.request
@@ -162,6 +163,12 @@ def _run_selected_workflow_sync(bridge_node: Any, timeout: float = 30.0) -> Opti
     client_id = uuid.uuid4().hex
 
     try:
+        video_bundle = _render_video_bundle_before_comfy(bridge_node)
+    except Exception as exc:
+        napi.set_knob_value(bridge_node, "status", f"video render failed: {exc}")
+        return None
+
+    try:
         data = _request_json(
             "POST",
             f"{_base_url(host, port)}/nuke_bridge/run_workflow",
@@ -182,7 +189,7 @@ def _run_selected_workflow_sync(bridge_node: Any, timeout: float = 30.0) -> Opti
     if not prompt:
         napi.set_knob_value(bridge_node, "status", f"run: no prompt for {wid}")
         return None
-    prompt = _patch_nuke_bridge_prompt(prompt, bridge_node)
+    prompt = _patch_nuke_bridge_prompt(prompt, bridge_node, video_bundle)
 
     from . import comfy_progress
     cid = data.get("client_id") or client_id
@@ -199,7 +206,31 @@ def _run_selected_workflow_sync(bridge_node: Any, timeout: float = 30.0) -> Opti
     return {"client_id": cid, "prompt_id": prompt_id, "status": status}
 
 
-def _patch_nuke_bridge_prompt(prompt: Any, bridge_node: Any) -> Any:
+def _render_video_bundle_before_comfy(bridge_node: Any) -> Dict[str, Any]:
+    from . import napi, video
+    from .settings import DEFAULT_SETTINGS, load_settings
+
+    first = int(napi.knob_value(bridge_node, "video_first") or napi.root_frame())
+    last = int(napi.knob_value(bridge_node, "video_last") or first)
+    if last < first:
+        raise ValueError(f"invalid video frame range: {first}-{last}")
+    fps = float(napi.knob_value(bridge_node, "video_fps") or 24.0)
+    fmt = str(napi.knob_value(bridge_node, "video_format") or "mov").strip().lower()
+    codec = str(napi.knob_value(bridge_node, "video_mov_codec") or "prores_422hq").strip().lower()
+    colorspace = str(napi.knob_value(bridge_node, "video_colorspace") or "")
+    output_dir = str(napi.knob_value(bridge_node, "output_directory") or load_settings().get("output_directory") or DEFAULT_SETTINGS["output_directory"])
+
+    napi.set_knob_value(bridge_node, "status", f"rendering video {first}-{last}…")
+    bundle = video.export_video_bundle(bridge_node, output_dir, first, last, fps, fmt, codec, colorspace)
+    for key in ("main_path", "mask_path"):
+        path = str(bundle.get(key) or "")
+        if not path or not os.path.isfile(path) or os.path.getsize(path) <= 0:
+            raise RuntimeError(f"missing rendered {key}: {path}")
+    napi.set_knob_value(bridge_node, "status", "video render complete")
+    return bundle
+
+
+def _patch_nuke_bridge_prompt(prompt: Any, bridge_node: Any, video_bundle: Optional[Dict[str, Any]] = None) -> Any:
     """Apply Nuke-side bridge settings to NukeBridge nodes before submit."""
     from . import napi
 
@@ -231,4 +262,8 @@ def _patch_nuke_bridge_prompt(prompt: Any, bridge_node: Any) -> Any:
                 inputs["format"] = video_format
                 inputs["mov_codec"] = video_codec
                 inputs["colorspace"] = video_colorspace if class_type == "FromNukeVideo" else ""
+                if class_type == "FromNukeVideo" and video_bundle:
+                    inputs["main_path"] = video_bundle["main_path"]
+                    inputs["mask_path"] = video_bundle["mask_path"]
+                    inputs["metadata_json"] = json.dumps(video_bundle.get("metadata") or {})
     return patched
