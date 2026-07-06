@@ -37,9 +37,7 @@ class FromNuke:
                 "host": ("STRING", {"default": "127.0.0.1"}),
                 "port": ("INT", {"default": 8765, "min": 1, "max": 65535}),
                 "frame": ("INT", {"default": -1, "min": -1, "max": 2**31 - 1}),
-                # STRING keeps old workflows valid if a previous timeout value
-                # (for example 30) was serialized into this newly-added slot.
-                "format": ("STRING", {"default": "png8"}),
+                "format": (["png8", "exr16"], {"default": "png8"}),
                 "timeout": ("FLOAT", {"default": 30.0, "min": 1.0, "max": 600.0}),
             },
             "optional": {},
@@ -106,9 +104,7 @@ class ToNuke:
                 "host": ("STRING", {"default": "127.0.0.1"}),
                 "port": ("INT", {"default": 8765, "min": 1, "max": 65535}),
                 "filename_prefix": ("STRING", {"default": "comfy_result"}),
-                # STRING keeps old workflows valid if a previous timeout value
-                # (for example 30) was serialized into this newly-added slot.
-                "format": ("STRING", {"default": "png8"}),
+                "format": (["png8", "exr16"], {"default": "png8"}),
                 "timeout": ("FLOAT", {"default": 30.0, "min": 1.0, "max": 600.0}),
             }
         }
