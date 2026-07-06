@@ -10,8 +10,8 @@
 
 import { app } from "/scripts/app.js";
 
-const FROM_NUKE_TYPES = ["FromNuke", "Nuke Bridge: From Nuke"];
-const TO_NUKE_TYPES = ["ToNuke", "Nuke Bridge: To Nuke"];
+const FROM_NUKE_TYPES = ["FromNuke", "FromNukeVideo", "Nuke Bridge: From Nuke", "Nuke Bridge: From Nuke Video"];
+const TO_NUKE_TYPES = ["ToNuke", "ToNukeVideo", "Nuke Bridge: To Nuke", "Nuke Bridge: To Nuke Video"];
 const PUBLISH_DEBOUNCE_MS = 800;
 const POLL_MS = 3000;
 
