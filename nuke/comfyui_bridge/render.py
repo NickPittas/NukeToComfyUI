@@ -229,6 +229,19 @@ def _pil_replace_alpha(source_png: bytes, mask_png: Optional[bytes], invert: boo
     return buf.getvalue()
 
 
+def _pil_invert_alpha(source_png: bytes) -> bytes:
+    from PIL import Image
+    import numpy as np
+
+    img = Image.open(io.BytesIO(source_png)).convert("RGBA")
+    arr = np.asarray(img).copy()
+    arr[..., 3] = 255 - arr[..., 3]
+    out = Image.fromarray(arr, mode="RGBA")
+    buf = io.BytesIO()
+    out.save(buf, format="PNG")
+    return buf.getvalue()
+
+
 def render_frame_png(
     bridge_node: Any,
     frame: int,
@@ -263,15 +276,6 @@ def render_frame_png(
             temp_nodes: list = []
             try:
                 chain = src
-
-                # ComfyUI's MASK socket is inverted from Nuke alpha. To make
-                # the user-facing mode names match Nuke's visible alpha/mask
-                # meaning, source alpha needs an inverted carrier here; the
-                # FromNuke node then does mask = 1 - carrier.
-                if mask_source == "source alpha":
-                    inv = nuke.nodes.Invert(inputs=[chain], channels="alpha")
-                    temp_nodes.append(inv)
-                    chain = inv
 
                 _write_png(nuke, chain, src_path, frame, temp_nodes, colorspace)
                 fmt = src.format()
@@ -308,7 +312,9 @@ def render_frame_png(
 
         src_png, mask_png, width, height = napi.call(_render)
 
-        if is_mask_mode:
+        if mask_source == "invert source alpha":
+            data = _pil_invert_alpha(src_png)
+        elif is_mask_mode:
             data = _pil_replace_alpha(src_png, mask_png, invert=mask_source == "invert mask input")
         else:
             data = src_png
@@ -362,11 +368,7 @@ def render_frame_exr(
             temp_nodes: list = []
             try:
                 chain = src
-                # Match PNG semantics: user-facing source alpha means the
-                # visible Nuke alpha/mask is used, but ComfyUI masks are
-                # inverted later (mask = 1 - carrier), so the carrier is
-                # inverted here. Invert source alpha therefore uses raw alpha.
-                if mask_source == "source alpha":
+                if mask_source == "invert source alpha":
                     inv = nuke.nodes.Invert(inputs=[chain], channels="alpha")
                     temp_nodes.append(inv)
                     chain = inv

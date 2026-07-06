@@ -212,10 +212,11 @@ def _patch_nuke_bridge_prompt(prompt: Any, bridge_node: Any) -> Any:
     for node in (patched or {}).values() if isinstance(patched, dict) else []:
         if not isinstance(node, dict):
             continue
-        if node.get("class_type") not in ("FromNuke", "ToNuke"):
+        class_type = node.get("class_type")
+        if class_type not in ("FromNuke", "ToNuke"):
             continue
         inputs = node.get("inputs")
         if isinstance(inputs, dict):
             inputs["format"] = fmt
-            inputs["colorspace"] = colorspace
+            inputs["colorspace"] = colorspace if class_type == "FromNuke" else ""
     return patched

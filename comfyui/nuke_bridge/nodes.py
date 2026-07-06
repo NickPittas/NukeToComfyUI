@@ -150,8 +150,10 @@ class ToNuke:
             "X-NukeBridge-Filename-Prefix": filename_prefix or "comfy_result",
             "X-NukeBridge-Frame": "-1",
             "X-NukeBridge-Format": fmt_tag,
-            "X-NukeBridge-Colorspace": _colorspace_value(colorspace),
         }
+        cs = _colorspace_value(colorspace)
+        if cs:
+            headers["X-NukeBridge-Colorspace"] = cs
         resp = requests.post(url, data=body, headers=headers, timeout=float(timeout))
         if resp.status_code != 200:
             raise RuntimeError(

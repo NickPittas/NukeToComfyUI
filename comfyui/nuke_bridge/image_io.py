@@ -123,6 +123,7 @@ def _exr_bytes_to_array(exr_bytes: bytes) -> np.ndarray:
             try:
                 spec = inp.spec()
                 arr = inp.read_image()
+                channelnames = list(getattr(spec, "channelnames", []) or [])
             finally:
                 inp.close()
         finally:
@@ -134,6 +135,26 @@ def _exr_bytes_to_array(exr_bytes: bytes) -> np.ndarray:
         if arr is None:
             raise RuntimeError("OpenImageIO read_image returned None")
         arr = np.asarray(arr)
+        if arr.ndim == 3 and channelnames:
+            names = [str(n).lower() for n in channelnames]
+
+            def _find(candidates: tuple[str, ...]) -> Optional[int]:
+                for candidate in candidates:
+                    for idx, name in enumerate(names):
+                        tail = name.split(".")[-1]
+                        if name == candidate or tail == candidate:
+                            return idx
+                return None
+
+            r = _find(("r", "red"))
+            g = _find(("g", "green"))
+            b = _find(("b", "blue"))
+            a = _find(("a", "alpha"))
+            if r is not None and g is not None and b is not None:
+                order = [r, g, b]
+                if a is not None:
+                    order.append(a)
+                arr = arr[:, :, order]
         # OIIO returns HWC for most configs; normalize dtype to float32.
         if arr.dtype != np.float32:
             arr = arr.astype(np.float32)
@@ -185,13 +206,15 @@ def tensor_to_exr_bytes(image: torch.Tensor) -> bytes:
 
     if image.dim() == 3:
         image = image.unsqueeze(0)
-    arr = image[0].clamp(0.0, 1.0).cpu().numpy().astype(np.float32)
+    arr = image[0].clamp(0.0, 1.0).detach().cpu().numpy().astype(np.float32)
     if arr.shape[-1] == 4:
         arr = arr[:, :, :3]
+    arr = np.ascontiguousarray(arr)
     height, width, channels = arr.shape
 
     spec = oiio.ImageSpec(width, height, channels, oiio.HALF)
-    # sRGB/linear metadata is left at default; Nuke decides result colorspace.
+    spec.channelnames = ["R", "G", "B", "A"][:channels]
+    spec.attribute("compression", "zip")
     with tempfile.NamedTemporaryFile(prefix="nuke_bridge_", suffix=".exr", delete=False) as fh:
         tmp = fh.name
     try:
@@ -201,8 +224,10 @@ def tensor_to_exr_bytes(image: torch.Tensor) -> bytes:
         ok = out.open(tmp, spec)
         try:
             if not ok:
-                raise RuntimeError("OpenImageIO failed to open EXR for write")
-            out.write_image(arr)
+                raise RuntimeError(f"OpenImageIO failed to open EXR: {out.geterror()}")
+            ok = out.write_image(arr)
+            if not ok:
+                raise RuntimeError(f"OpenImageIO failed to write EXR: {out.geterror()}")
         finally:
             out.close()
         with open(tmp, "rb") as fh:

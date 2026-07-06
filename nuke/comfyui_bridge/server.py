@@ -290,7 +290,6 @@ class _BridgeHandler(BaseHTTPRequestHandler):
                 node, _ = self._resolve_bridge_node(bridge_id)
                 if node is not None:
                     create_read = bool(napi.knob_value(node, "create_read_on_result"))
-                    colorspace = self._bridge_colorspace(node, colorspace)
             except Exception:
                 pass
 
