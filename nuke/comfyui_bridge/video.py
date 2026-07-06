@@ -117,6 +117,13 @@ def _set_movie_codec(write: Any, fmt: str, mov_codec: str) -> str:
         return ", ".join((codec, profile))
 
 
+def _set_mp4_fallback_codec(write: Any) -> str:
+    codec_knob = write.knob("mov64_codec")
+    codec = _set_enum_by_alias(codec_knob, ("mp4v", "MPEG-4", "mpeg4", "m4v"))
+    quality = _set_enum_by_alias(write.knob("mov64_quality"), ("High",))
+    return ", ".join((codec, quality))
+
+
 def _set_first_matching_knob(write: Any, names: tuple[str, ...], aliases: tuple[str, ...], required: bool = True) -> str:
     candidates = list(names)
     wanted = {_norm(name) for name in names}
@@ -174,7 +181,13 @@ def _write_movie(nuke: Any, input_node: Any, path: str, first: int, last: int, f
         _set_movie_format(write)
         _set_movie_codec(write, fmt, mov_codec)
         _set_colorspace(write, colorspace)
-        nuke.execute(write, int(first), int(last))
+        try:
+            nuke.execute(write, int(first), int(last))
+        except RuntimeError as exc:
+            if fmt != "mp4" or "not supported in this container" not in str(exc):
+                raise
+            _set_mp4_fallback_codec(write)
+            nuke.execute(write, int(first), int(last))
     finally:
         try:
             nuke.delete(write)
