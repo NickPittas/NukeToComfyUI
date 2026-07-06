@@ -103,11 +103,12 @@ def _set_movie_codec(write: Any, fmt: str, mov_codec: str) -> str:
         raise RuntimeError(f"missing mov64_codec knob; codec knobs: {_codec_debug(write)}")
 
     if fmt == "mp4":
-        codec = _set_enum_by_alias(codec_knob, ("h264\tH.264", "H.264", "h264"))
-        profile = _set_enum_by_alias(write.knob("mov_h264_codec_profile"), ("High 4:2:0 8-bit",))
-        quality = _set_enum_by_alias(write.knob("mov64_quality"), ("High",))
+        write.knob("mov64_format").setValue("mp4 (MP4 (MPEG-4 Part 14))")
+        codec_knob.setValue("h264")
+        write.knob("mov_h264_codec_profile").setValue("High 4:2:0 8-bit")
+        write.knob("mov64_quality").setValue("High")
         _set_h264_defaults(write)
-        return ", ".join((codec, profile, quality))
+        return "h264, High 4:2:0 8-bit, High"
     elif mov_codec == "prores_4444":
         codec = _set_enum_by_alias(codec_knob, ("appr\tApple ProRes", "Apple ProRes", "appr"))
         profile = _set_enum_by_alias(write.knob("mov_prores_codec_profile"), ("ProRes 4:4:4:4 12-bit",))
