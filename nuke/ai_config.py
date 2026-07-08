@@ -424,11 +424,18 @@ def health_report(comfyui_root: str | None = None) -> List[Dict[str, str]]:
             flux_detail = "FLUX dir exists but no snapshot/model_index.json"
     report.append({"name": "FLUX.1-dev", "status": flux_status, "detail": flux_detail})
 
-    # Sammie
+    # Sammie — release-style install needs launcher.py + a platform launcher.
     sr = resolve_sammie_root(settings)
     sl = sammie_launcher(sr)
-    report.append({"name": "Sammie-Roto", "status": "ok" if os.path.isfile(sl) else "missing",
-                   "detail": sl})
+    has_root = os.path.isdir(sr)
+    has_launcher_py = os.path.isfile(os.path.join(sr, "launcher.py"))
+    if os.path.isfile(sl) and has_launcher_py:
+        report.append({"name": "Sammie-Roto", "status": "ok", "detail": sl})
+    elif has_root:
+        report.append({"name": "Sammie-Roto", "status": "missing",
+                       "detail": f"root exists but launcher missing: {sl}"})
+    else:
+        report.append({"name": "Sammie-Roto", "status": "missing", "detail": sl})
 
     # LTX — dev mode requires package.json + pnpm; never OK an arbitrary dir.
     lr = resolve_ltx_root(settings)

@@ -442,13 +442,62 @@ _SAMMIE_URL = "https://github.com/Zarxrax/Sammie-Roto-2.git"
 _SAMMIE_REMOTE_HINT = "Zarxrax/Sammie-Roto-2"
 
 
+def _readme_mentions_sammie(root: str) -> bool:
+    """True if README.md's first chunk mentions Sammie-Roto (not a plain README)."""
+    readme = os.path.join(root, "README.md")
+    if not os.path.isfile(readme):
+        return False
+    try:
+        with open(readme, "r", encoding="utf-8", errors="replace") as fh:
+            head = fh.read(4096)
+    except OSError:
+        return False
+    return "Sammie-Roto" in head  # also covers "Sammie-Roto 2"
+
+
+def _looks_like_sammie(root: str) -> bool:
+    """True if *root* looks like a Sammie-Roto install (release or git clone).
+
+    Requires launcher.py + at least one platform launcher, plus a Sammie-specific
+    marker: sammie_main.py, sammie/ dir, videomama/ dir, or a README.md whose
+    first chunk mentions Sammie-Roto. A plain README alone is not accepted.
+    """
+    if not os.path.isdir(root):
+        return False
+    if not os.path.isfile(os.path.join(root, "launcher.py")):
+        return False
+    has_launcher = (
+        os.path.isfile(os.path.join(root, "run_sammie.bat"))
+        or os.path.isfile(os.path.join(root, "run_sammie.command"))
+        or os.path.isfile(os.path.join(root, "run_sammie.sh"))
+    )
+    if not has_launcher:
+        return False
+    return (
+        os.path.isfile(os.path.join(root, "sammie_main.py"))
+        or os.path.isdir(os.path.join(root, "sammie"))
+        or os.path.isdir(os.path.join(root, "videomama"))
+        or _readme_mentions_sammie(root)
+    )
+
+
 def _sammie_official_cmd(root: str) -> list | None:
-    """Return official installer command for the platform, or None if absent."""
+    """Return official installer command for the platform, or None if absent.
+
+    Supports upstream main (install.sh/install.bat) and the release layout
+    (install_dependencies.sh/install_dependencies.bat).
+    """
     if os.name == "nt":
-        installer = os.path.join(root, "install.bat")
-        return ["cmd", "/c", installer] if os.path.isfile(installer) else None
-    installer = os.path.join(root, "install.sh")
-    return ["bash", installer] if os.path.isfile(installer) else None
+        for name in ("install.bat", "install_dependencies.bat"):
+            installer = os.path.join(root, name)
+            if os.path.isfile(installer):
+                return ["cmd", "/c", installer]
+        return None
+    for name in ("install.sh", "install_dependencies.sh"):
+        installer = os.path.join(root, name)
+        if os.path.isfile(installer):
+            return ["bash", installer]
+    return None
 
 
 def install_sammie(root: str, dry_run: bool = False,
@@ -463,28 +512,53 @@ def install_sammie(root: str, dry_run: bool = False,
     root = normalize_path(root)
     _log(f"  Target: {root}", log_fh)
 
-    # Existing directory: must be our git repo, else fail without deleting.
-    if os.path.isdir(root) and os.listdir(root):
-        if not os.path.isdir(os.path.join(root, ".git")):
-            _log(f"  ERROR: {root} exists and is not a git repo.", log_fh)
+    # Existing directory: classify as git repo, release-style Sammie, or foreign.
+    # listdir can throw on permission/IO errors — read safely.
+    is_dir = os.path.isdir(root)
+    try:
+        listing = os.listdir(root) if is_dir else []
+    except OSError as e:
+        _log(f"  ERROR: cannot read directory {root}: {e}", log_fh)
+        return False
+    if is_dir and listing:
+        if os.path.isdir(os.path.join(root, ".git")):
+            # Verify remote origin.
+            rc, so, _ = _run(["git", "config", "--get", "remote.origin.url"],
+                             cwd=root, log_fh=log_fh, timeout=30)
+            if rc != 0 or _SAMMIE_REMOTE_HINT not in (so or ""):
+                _log(f"  ERROR: {root} is a git repo but remote is not {_SAMMIE_URL}", log_fh)
+                _log(f"    remote: {so.strip() or '(none)'}", log_fh)
+                return False
+            _log("  Existing Sammie git repo found.", log_fh)
+            if dry_run:
+                _log("  [DRY-RUN] Would pull updates and run installer", log_fh)
+                return True
+            if yes or _confirm("  Pull latest?", default=True):
+                prc, _, pse = _run(["git", "pull"], cwd=root, log_fh=log_fh, timeout=600)
+                if prc != 0:
+                    _log(f"  ERROR: git pull failed: {pse.strip()}", log_fh)
+                    return False
+        elif _looks_like_sammie(root):
+            # Release-style install (no .git): accept, do not delete/move it.
+            _log(f"  Existing release-style Sammie install found at {root}.", log_fh)
+            if dry_run:
+                cmd = _sammie_official_cmd(root)
+                if cmd:
+                    _log(f"  [DRY-RUN] Would run installer: {' '.join(cmd)}", log_fh)
+                else:
+                    _log("  [DRY-RUN] No installer script; would validate launcher only", log_fh)
+                launcher = sammie_launcher(root)
+                if os.path.isfile(launcher):
+                    _log(f"  [DRY-RUN] Current-platform launcher present: {launcher}", log_fh)
+                    return True
+                _log(f"  [DRY-RUN] ERROR: current-platform launcher missing: {launcher}", log_fh)
+                _log("  [DRY-RUN] Validation would fail.", log_fh)
+                return False
+            # Fall through to official installer / launcher validation below.
+        else:
+            _log(f"  ERROR: {root} exists, is not a git repo, and does not look like Sammie.", log_fh)
             _log("  Choose a different path or remove it manually.", log_fh)
             return False
-        # Verify remote origin.
-        rc, so, _ = _run(["git", "config", "--get", "remote.origin.url"],
-                         cwd=root, log_fh=log_fh, timeout=30)
-        if rc != 0 or _SAMMIE_REMOTE_HINT not in (so or ""):
-            _log(f"  ERROR: {root} is a git repo but remote is not {_SAMMIE_URL}", log_fh)
-            _log(f"    remote: {so.strip() or '(none)'}", log_fh)
-            return False
-        _log("  Existing Sammie git repo found.", log_fh)
-        if dry_run:
-            _log("  [DRY-RUN] Would pull updates and run installer", log_fh)
-            return True
-        if yes or _confirm("  Pull latest?", default=True):
-            prc, _, pse = _run(["git", "pull"], cwd=root, log_fh=log_fh, timeout=600)
-            if prc != 0:
-                _log(f"  ERROR: git pull failed: {pse.strip()}", log_fh)
-                return False
     else:
         if dry_run:
             _log(f"  [DRY-RUN] Would clone {_SAMMIE_URL} -> {root}", log_fh)
@@ -497,16 +571,19 @@ def install_sammie(root: str, dry_run: bool = False,
             _log(f"  ERROR: clone failed: {se.strip()}", log_fh)
             return False
 
-    # Official installer.
+    # Official installer (shared by git/release/clone paths).
     cmd = _sammie_official_cmd(root)
     if cmd is None:
-        _log(f"  ERROR: no official installer found in {root}", log_fh)
+        # No installer script (e.g. release-style with deps pre-bundled): still
+        # usable if the launcher is present.
+        launcher = sammie_launcher(root)
+        if os.path.isfile(launcher):
+            _log(f"  No installer script found; launcher already present: {launcher}", log_fh)
+            _log("  OK (release-style, skipping dependency install)", log_fh)
+            return True
+        _log(f"  ERROR: no official installer found in {root} and no launcher present", log_fh)
         _log("  Sammie setup is partial; check upstream README for manual setup.", log_fh)
         return False
-
-    if dry_run:
-        _log(f"  [DRY-RUN] Would run: {' '.join(cmd)}", log_fh)
-        return True
 
     _log("  Running official installer (streaming)...", log_fh)
     rc = _run_streaming(cmd, cwd=root, log_fh=log_fh, timeout=3600, env=tool_env())
