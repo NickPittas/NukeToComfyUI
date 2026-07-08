@@ -36,8 +36,8 @@ Create preview overlay  builds a red, alpha-0.25 overlay of the source-space gen
 ```
 
 `omnipaint_device/steps/seed/max_side/low_vram` are passed to the adapter as the
-`OMNIPAINT_DEVICE`, `OMNAPAINT_STEPS`, `OMNAPAINT_SEED`, `OMNAPAINT_MAX_SIDE`,
-and `OMNAPAINT_LOW_VRAM` environment variables (`omnipaint_low_vram` as `1`/`0`).
+`OMNIPAINT_DEVICE`, `OMNIPAINT_STEPS`, `OMNIPAINT_SEED`, `OMNIPAINT_MAX_SIDE`,
+and `OMNIPAINT_LOW_VRAM` environment variables (`omnipaint_low_vram` as `1`/`0`).
 
 The **Check backend** button first verifies the plugin-local venv, adapter
 script, and OmniPaint repo exist (clear setup error if not), then runs the
@@ -112,7 +112,7 @@ It is idempotent (re-running skips what exists) and creates, all under `.slim/`:
   runtime and is not imported by removal).
 - `clonedeps/repos/yeates__OmniPaint/` — OmniPaint clone at the pinned, tested
   commit (`cdb7c263...`). An existing clone must sit at that commit or the script
-  fails with a re-pin hint; set `OMNAPAINT_REF=<branch/commit>` to accept a
+  fails with a re-pin hint; set `OMNIPAINT_REF=<branch/commit>` to accept a
   different ref.
 - OmniPaint removal weights + `remove.npz` embeddings (public `yeates/OmniPaint`
   repo, via `huggingface_hub`).
@@ -148,6 +148,43 @@ OMNIPAINT_LOCAL_FILES_ONLY=1    # default 1 = load FLUX from local cache (offlin
 
 The Nuke node also sets `HF_HUB_OFFLINE=1` on the adapter subprocess when the
 local FLUX snapshot exists, so Nuke runs never need a network login.
+
+## Model health
+
+The repo also includes a stdlib model inventory module used by the installer and
+Nuke menu:
+
+```text
+nuke/omnipaint_models.py
+```
+
+It checks:
+
+```text
+OmniPaint venv
+OmniPaint repo
+OmniPaint LoRA
+remove.npz embeddings
+FLUX.1-dev required snapshot files
+NF4 bitsandbytes/diffusers readiness
+adapter runtime deps via tools/omnipaint_adapter.py --check
+```
+
+Run from the installer TUI:
+
+```text
+Check OmniPaint models
+```
+
+or from Nuke:
+
+```text
+Nuke > AI Setup > Model Health
+```
+
+Fast health may show `OmniPaint NF4: partial` when the package directories are
+present but the real import check has not been run. The installer's **Check
+OmniPaint models** runs the full check.
 
 ## Offline / local-only
 

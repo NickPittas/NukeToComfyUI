@@ -65,6 +65,7 @@ _bridge_menu.addCommand("Restart Local Server", _restart_bridge_server)
 # External AI app launchers (Sammie-Roto, LTX Desktop).
 from ai_launchers import (
     launch_sammie_roto, launch_ltx_desktop, open_settings, show_health,
+    show_model_health,
 )
 _launchers_menu = _nuke_menu.addMenu("AI Launchers")
 _launchers_menu.addCommand("Sammie-Roto (selected footage)", launch_sammie_roto)
@@ -73,6 +74,7 @@ _launchers_menu.addCommand("LTX Desktop", launch_ltx_desktop)
 _setup_menu = _nuke_menu.addMenu("AI Setup")
 _setup_menu.addCommand("Open Settings", open_settings)
 _setup_menu.addCommand("Health Check", show_health)
+_setup_menu.addCommand("Model Health", show_model_health)
 
 # Start once in GUI sessions so ComfyUI can pull from existing bridge nodes.
 server.autostart_if_in_nuke()

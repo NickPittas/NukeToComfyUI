@@ -20,7 +20,7 @@ _SCHEMA_VERSION = 2
 
 # Path keys whose stored values are filesystem roots and must be normalized
 # (expanduser + abspath + normpath) at the save/use boundary.
-_PATH_KEYS = ("comfyui_root", "sammie_root", "ltx_root")
+_PATH_KEYS = ("comfyui_root", "sammie_root", "ltx_root", "ltx_models_dir")
 
 # Markers for the managed init.py pluginAddPath block (shared with installer).
 INIT_MARK_BEGIN = "# >>> NukeToComfyUI >>>"
@@ -127,6 +127,7 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "comfyui_node_mode": "",
     "sammie_root": "",
     "ltx_root": "",
+    "ltx_models_dir": "",
 }
 
 
@@ -218,6 +219,61 @@ def resolve_ltx_root(settings: Dict[str, Any] | None = None) -> str:
     return os.path.join(os.path.expanduser("~"), "LTX-Desktop")
 
 
+def _ltx_app_data_dir() -> str:
+    """LTXDesktop app-data dir. Honors ``LTX_APP_DATA_DIR`` override."""
+    env = os.environ.get("LTX_APP_DATA_DIR", "").strip()
+    if env:
+        return normalize_path(env)
+    if os.name == "nt":
+        base = (os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
+                or os.path.join(os.path.expanduser("~"), "AppData", "Roaming"))
+    elif sys_platform() == "darwin":
+        base = os.path.join(os.path.expanduser("~"), "Library", "Application Support")
+    else:
+        base = os.environ.get("XDG_DATA_HOME") or os.path.join(
+            os.path.expanduser("~"), ".local", "share")
+    return os.path.join(base, "LTXDesktop")
+
+
+def _ltx_desktop_settings_path() -> str:
+    """LTXDesktop settings.json path inside the app-data dir."""
+    return os.path.join(_ltx_app_data_dir(), "settings.json")
+
+
+def _read_ltx_desktop_settings() -> Dict[str, Any]:
+    """Read LTXDesktop's settings.json as a dict ({} on any failure)."""
+    try:
+        with open(_ltx_desktop_settings_path(), encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def resolve_ltx_models_dir(settings: Dict[str, Any] | None = None) -> str:
+    """Resolve the LTX models dir.
+
+    Priority: env ``LTX_MODELS_DIR`` > settings ``ltx_models_dir`` >
+    LTXDesktop ``settings.json`` ``models_dir``/``modelsDir`` >
+    ``<app_data>/models`` if it already exists > ``''``.
+    Discovery-only; never invents or creates a path.
+    """
+    env = os.environ.get("LTX_MODELS_DIR", "").strip()
+    if env:
+        return normalize_path(env)
+    if settings is None:
+        settings = load_settings()
+    val = str(settings.get("ltx_models_dir") or "").strip()
+    if val:
+        return normalize_path(val)
+    data = _read_ltx_desktop_settings()
+    models = str(data.get("models_dir") or data.get("modelsDir") or "").strip()
+    if models:
+        return normalize_path(models)
+    default = os.path.join(_ltx_app_data_dir(), "models")
+    return default if os.path.isdir(default) else ""
+
+
 def resolve_comfyui_root(settings: Dict[str, Any] | None = None) -> str:
     env = os.environ.get("COMFYUI_ROOT", "").strip()
     if env:
@@ -244,24 +300,66 @@ def sammie_launcher(root: str | None = None) -> str:
     return candidate
 
 
+def _ltx_binary_candidates(root: str) -> List[str]:
+    """Ordered platform candidate paths for the built LTX Desktop binary."""
+    if os.name == "nt":
+        return [os.path.join(root, "release", "win-unpacked", "LTX Desktop.exe")]
+    if sys_platform() == "darwin":
+        # mac-arm64 (Apple Silicon) first, then intel mac.
+        app = ["LTX Desktop.app", "Contents", "MacOS", "LTX Desktop"]
+        return [os.path.join(root, "release", "mac-arm64", *app),
+                os.path.join(root, "release", "mac", *app)]
+    return [os.path.join(root, "release", "linux-unpacked", "ltx-desktop")]
+
+
+def _ltx_binary(root: str) -> str:
+    """First existing built binary, else the first candidate (may not exist)."""
+    cands = _ltx_binary_candidates(root)
+    for c in cands:
+        if os.path.isfile(c):
+            return c
+    return cands[0]
+
+
+def _looks_like_ltx_root(root: str) -> bool:
+    """True if *root* looks like an LTX Desktop checkout/release.
+
+    Accepts: a built binary, OR a package.json whose name is ltx-desktop, OR the
+    Electron+backend source layout (electron/main.ts + backend/pyproject.toml).
+    """
+    if not os.path.isdir(root):
+        return False
+    if os.path.isfile(_ltx_binary(root)):
+        return True
+    pkg = os.path.join(root, "package.json")
+    if os.path.isfile(pkg):
+        try:
+            with open(pkg, encoding="utf-8") as fh:
+                data = json.load(fh)
+            if isinstance(data, dict) and str(data.get("name", "")).lower() == "ltx-desktop":
+                return True
+        except (OSError, ValueError):
+            pass
+    return (
+        os.path.isfile(os.path.join(root, "electron", "main.ts"))
+        and os.path.isfile(os.path.join(root, "backend", "pyproject.toml"))
+    )
+
+
 def ltx_command(root: str | None = None) -> List[str] | None:
     """Return [cmd...] to launch LTX Desktop, or None if not runnable.
 
-    Built binary wins. Dev mode requires package.json AND pnpm on PATH — never
-    OK an arbitrary directory.
+    Built binary wins. Dev mode requires an LTX-looking root with package.json
+    AND pnpm on PATH — never OKs an arbitrary directory.
     """
     if root is None:
         root = resolve_ltx_root()
-    if os.name == "nt":
-        binary = os.path.join(root, "release", "win-unpacked", "LTX Desktop.exe")
-    elif sys_platform() == "darwin":
-        binary = os.path.join(root, "release", "mac", "LTX Desktop.app",
-                              "Contents", "MacOS", "LTX Desktop")
-    else:
-        binary = os.path.join(root, "release", "linux-unpacked", "ltx-desktop")
+    binary = _ltx_binary(root)
     if os.path.isfile(binary):
         return [binary]
-    if os.path.isfile(os.path.join(root, "package.json")) and shutil.which("pnpm"):
+    if (_looks_like_ltx_root(root)
+            and os.path.isfile(os.path.join(root, "package.json"))
+            and shutil.which("pnpm")):
         return ["pnpm", "dev"]
     return None
 
@@ -282,12 +380,15 @@ def tool_env(base: Dict[str, str] | None = None) -> Dict[str, str]:
     sammie = resolve_sammie_root(settings)
     ltx = resolve_ltx_root(settings)
     comfyui = resolve_comfyui_root(settings)
+    ltx_models = resolve_ltx_models_dir(settings)
     if sammie:
         env["SAMMIE_ROOT"] = sammie
     if ltx:
         env["LTX_ROOT"] = ltx
     if comfyui:
         env["COMFYUI_ROOT"] = comfyui
+    if ltx_models:
+        env["LTX_MODELS_DIR"] = ltx_models
     return env
 
 
@@ -319,32 +420,51 @@ def dirs_match(a: str, b: str) -> bool:
     return _rel_files(a) == _rel_files(b)
 
 
-def _flux_snapshot_ok(flux_dir: str) -> tuple[bool, str]:
-    """Require a FLUX snapshot dir with model_index.json."""
-    snapshots = os.path.join(flux_dir, "snapshots")
-    if os.path.isdir(snapshots):
-        try:
-            for name in os.listdir(snapshots):
-                sdir = os.path.join(snapshots, name)
-                if not os.path.isdir(sdir):
-                    continue
-                if os.path.isfile(os.path.join(sdir, "model_index.json")):
-                    return True, sdir
-        except OSError:
-            pass
-    return False, flux_dir
+def _omnipaint_model_report() -> List[Dict[str, str]]:
+    """Lazy wrapper around omnipaint_models.model_report() (avoids circular import)."""
+    import omnipaint_models  # local: omnipaint_models imports ai_config at load
+    return omnipaint_models.model_report()
+
+
+def _ltx_active_ic_lora(models_dir: str) -> tuple[str, str]:
+    """IC-LoRA inpaint adapter path + provenance label.
+
+    Reads the LTX active model profile's ``ic_lora_in_outpainting`` component
+    when available; otherwise falls back to the canonical adapter filename.
+    Returns (path, "active profile"|"canonical"). path may be "".
+    """
+    canonical = ""
+    if models_dir:
+        canonical = os.path.join(
+            models_dir, "adapters",
+            "ltx-2.3-22b-ic-lora-in-outpainting-0.9.safetensors")
+    try:
+        with open(os.path.join(_ltx_app_data_dir(), "model_profiles.json"),
+                  encoding="utf-8") as fh:
+            data = json.load(fh)
+        if isinstance(data, dict):
+            active = data.get("active_model_profile_id")
+            for p in data.get("profiles") or []:
+                if isinstance(p, dict) and p.get("id") == active:
+                    comps = p.get("components")
+                    if isinstance(comps, dict):
+                        path = comps.get("ic_lora_in_outpainting")
+                        if path:
+                            return str(path), "active profile"
+    except (OSError, ValueError):
+        pass
+    return canonical, "canonical"
 
 
 def health_report(comfyui_root: str | None = None) -> List[Dict[str, str]]:
     """Check filesystem for each component. Returns list of {name, status, detail}.
 
-    status values: ok | missing | stale | blocked. Never reports ok on a coarse
-    or platform-blocked check.
+    status values: ok | missing | stale | blocked | partial. Never reports ok on
+    a coarse or platform-blocked check.
     """
     settings = load_settings()
     report: List[Dict[str, str]] = []
     npp = nuke_plugin_path()
-    on_windows = os.name == "nt"
 
     # Nuke plugin
     ok = os.path.isdir(npp)
@@ -397,32 +517,9 @@ def health_report(comfyui_root: str | None = None) -> List[Dict[str, str]]:
         report.append({"name": "ComfyUI node", "status": "missing",
                        "detail": "ComfyUI root not configured"})
 
-    # OmniPaint venv / weights / FLUX — blocked on Windows, never false OK.
-    venv_py = os.path.join(repo_root(), ".slim", "venvs", "omnipaint", "bin", "python")
-    if on_windows:
-        venv_py = os.path.join(repo_root(), ".slim", "venvs", "omnipaint", "Scripts", "python.exe")
-    venv_status = "blocked" if on_windows else ("ok" if os.path.isfile(venv_py) else "missing")
-    report.append({"name": "OmniPaint venv", "status": venv_status, "detail": venv_py})
-
-    weights = os.path.join(repo_root(), ".slim", "clonedeps", "repos",
-                           "yeates__OmniPaint", "weights", "omnipaint_remove.safetensors")
-    weights_status = "blocked" if on_windows else ("ok" if os.path.isfile(weights) else "missing")
-    report.append({"name": "OmniPaint weights", "status": weights_status, "detail": weights})
-
-    flux_dir = os.path.join(repo_root(), ".slim", "cache", "huggingface", "hub",
-                            "models--black-forest-labs--FLUX.1-dev")
-    flux_status = "blocked" if on_windows else "missing"
-    flux_detail = flux_dir
-    if on_windows:
-        flux_detail = "OmniPaint/FLUX not supported on Windows"
-    elif os.path.isdir(flux_dir):
-        ok2, where = _flux_snapshot_ok(flux_dir)
-        if ok2:
-            flux_status = "ok"
-            flux_detail = where
-        else:
-            flux_detail = "FLUX dir exists but no snapshot/model_index.json"
-    report.append({"name": "FLUX.1-dev", "status": flux_status, "detail": flux_detail})
+    # OmniPaint backend assets/FLUX/NF4 — delegated to the model manager
+    # (mirrors the adapter's required-file checks; never false-OKs).
+    report.extend(_omnipaint_model_report())
 
     # Sammie — release-style install needs launcher.py + a platform launcher.
     sr = resolve_sammie_root(settings)
@@ -437,10 +534,35 @@ def health_report(comfyui_root: str | None = None) -> List[Dict[str, str]]:
     else:
         report.append({"name": "Sammie-Roto", "status": "missing", "detail": sl})
 
-    # LTX — dev mode requires package.json + pnpm; never OK an arbitrary dir.
+    # LTX Desktop — discovery/config only; never installs or builds.
     lr = resolve_ltx_root(settings)
     lcmd = ltx_command(lr)
-    report.append({"name": "LTX Desktop", "status": "ok" if lcmd else "missing",
-                   "detail": lcmd[0] if lcmd else f"not runnable: {lr}"})
+    if lcmd:
+        report.append({"name": "LTX Desktop", "status": "ok", "detail": lcmd[0]})
+    elif _looks_like_ltx_root(lr):
+        report.append({"name": "LTX Desktop", "status": "partial",
+                       "detail": f"root looks like LTX but no runnable command: {lr}"})
+    else:
+        report.append({"name": "LTX Desktop", "status": "missing",
+                       "detail": f"not found / not LTX: {lr}"})
+
+    # LTX models dir — ok if configured/discovered dir exists.
+    lmd = resolve_ltx_models_dir(settings)
+    if lmd and os.path.isdir(lmd):
+        report.append({"name": "LTX models dir", "status": "ok", "detail": lmd})
+    else:
+        report.append({"name": "LTX models dir", "status": "missing",
+                       "detail": lmd or "not configured/discovered"})
+
+    # LTX IC-LoRA inpaint adapter — discovery only; never downloads.
+    # Honor the LTX active model profile's ic_lora_in_outpainting path when set;
+    # fall back to the canonical adapter filename.
+    ic_path, ic_source = _ltx_active_ic_lora(lmd)
+    if ic_path and os.path.isfile(ic_path):
+        report.append({"name": "LTX IC-LoRA inpaint", "status": "ok",
+                       "detail": f"[{ic_source}] {ic_path}"})
+    else:
+        report.append({"name": "LTX IC-LoRA inpaint", "status": "missing",
+                       "detail": f"[{ic_source}] {ic_path or 'no models dir/path configured'}"})
 
     return report

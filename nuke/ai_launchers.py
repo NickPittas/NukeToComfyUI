@@ -123,6 +123,19 @@ def show_health() -> None:
     nuke.message("AI Toolchain Health Check\n\n" + "\n".join(lines))
 
 
+def show_model_health() -> None:
+    """Show an OmniPaint/FLUX/NF4 model-health dialog (fast, no venv import)."""
+    import nuke
+    from omnipaint_models import model_report
+    lines = []
+    for item in model_report(check_nf4=False):
+        icon = "✓" if item["status"] == "ok" else "✗"
+        lines.append(f"{icon} {item['name']}: {item['status']}")
+        if item["status"] != "ok":
+            lines.append(f"    {item['detail']}")
+    nuke.message("OmniPaint Model Health\n\n" + "\n".join(lines))
+
+
 def sys_platform() -> str:
     import sys
     return sys.platform

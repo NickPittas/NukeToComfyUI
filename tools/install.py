@@ -41,10 +41,12 @@ from ai_config import (  # noqa: E402
     normalize_path,
     paths_equal,
     repo_root,
+    resolve_ltx_models_dir,
     save_settings,
     sammie_launcher,
     tool_env,
 )
+from omnipaint_models import model_report
 
 _MARK_BEGIN = INIT_MARK_BEGIN
 _MARK_END = INIT_MARK_END
@@ -203,15 +205,18 @@ def configure_paths(settings: dict, dry_run: bool = False,
             os.path.expanduser("~"), "Sammie-Roto-2")
         ltx = normalize_path(settings.get("ltx_root", "")) or os.path.join(
             os.path.expanduser("~"), "LTX-Desktop")
+        ltx_models = resolve_ltx_models_dir(settings)
         settings["comfyui_root"] = comfyui
         settings["sammie_root"] = sammie
         settings["ltx_root"] = ltx
+        settings["ltx_models_dir"] = ltx_models
         if comfyui:
             _log(f"  ComfyUI root: {comfyui}", log_fh)
         else:
             _log("  ComfyUI root: not configured (ComfyUI steps skipped)", log_fh)
         _log(f"  Sammie root:  {sammie}", log_fh)
         _log(f"  LTX root:     {ltx}", log_fh)
+        _log(f"  LTX models:   {ltx_models or '(not discovered)'}", log_fh)
         return settings
 
     comfyui = _ask("ComfyUI root", settings.get("comfyui_root", ""))
@@ -224,6 +229,9 @@ def configure_paths(settings: dict, dry_run: bool = False,
         os.path.expanduser("~"), "LTX-Desktop")
     ltx = _ask("LTX Desktop root", ltx_default)
     settings["ltx_root"] = normalize_path(ltx)
+    ltx_models_default = settings.get("ltx_models_dir", "") or resolve_ltx_models_dir(settings)
+    ltx_models = _ask("LTX models dir", ltx_models_default)
+    settings["ltx_models_dir"] = normalize_path(ltx_models)
     return settings
 
 
@@ -424,14 +432,20 @@ def install_omnipaint(dry_run: bool = False, log_fh: Any = None) -> bool:
         _log(f"  PARTIAL/FAILED (exit {rc})", log_fh)
         return False
     # Validate health after script exit 0 — exit code alone never means OK.
-    relevant = ["OmniPaint venv", "OmniPaint weights", "FLUX.1-dev"]
-    report = {item["name"]: item for item in health_report()}
-    bad = [n for n in relevant if report.get(n, {}).get("status") != "ok"]
+    # Core requirements incl. a real runtime-deps import check via the adapter.
+    # NF4 is a warning only (removal still works unquantized without it).
+    core = ["OmniPaint venv", "OmniPaint repo", "OmniPaint LoRA",
+            "OmniPaint embeddings", "FLUX.1-dev", "OmniPaint runtime deps"]
+    report = {item["name"]: item for item in model_report(check_runtime=True)}
+    bad = [n for n in core if report.get(n, {}).get("status") != "ok"]
     if bad:
         for n in bad:
             item = report[n]
             _log(f"  PARTIAL/BLOCKER: {n} -> {item['status']} ({item['detail']})", log_fh)
         return False
+    nf4 = report.get("OmniPaint NF4", {})
+    if nf4.get("status") != "ok":
+        _log(f"  WARNING: OmniPaint NF4 -> {nf4.get('status')} ({nf4.get('detail')})", log_fh)
     _log("  OK", log_fh)
     return True
 
@@ -612,6 +626,16 @@ def do_health_check(log_fh: Any = None) -> None:
             _log(f"      {item['detail']}", log_fh)
 
 
+def do_model_report(log_fh: Any = None) -> None:
+    """Print the OmniPaint/FLUX/NF4 model report (real NF4 import + runtime check)."""
+    _log("\n=== OmniPaint Model Report ===", log_fh)
+    for item in model_report(check_nf4=True, check_runtime=True):
+        icon = "OK" if item["status"] == "ok" else "!!"
+        _log(f"  [{icon}] {item['name']}: {item['status']}", log_fh)
+        if item["status"] != "ok":
+            _log(f"      {item['detail']}", log_fh)
+
+
 # --- settings save ---------------------------------------------------------
 
 def save_and_log(settings: dict, dry_run: bool = False, log_fh: Any = None) -> None:
@@ -628,9 +652,11 @@ def save_and_log(settings: dict, dry_run: bool = False, log_fh: Any = None) -> N
 _MENU_ITEMS = [
     ("Preflight checks", "preflight"),
     ("Configure paths", "configure"),
+    ("Configure LTX Desktop (root/models)", "ltx"),
     ("Install Nuke plugin (init.py)", "nuke"),
     ("Link ComfyUI custom node", "comfyui"),
     ("Install OmniPaint backend", "omnipaint"),
+    ("Check OmniPaint models", "models"),
     ("Install Sammie-Roto", "sammie"),
     ("Health check", "health"),
     ("Save settings", "save"),
@@ -722,6 +748,17 @@ def main() -> int:
             preflight(log_fh=log_fh)
         elif action == "configure":
             settings = configure_paths(settings, log_fh=log_fh)
+        elif action == "ltx":
+            ltx_default = settings.get("ltx_root", "") or os.path.join(
+                os.path.expanduser("~"), "LTX-Desktop")
+            ltx = _ask("LTX Desktop root", ltx_default)
+            settings["ltx_root"] = normalize_path(ltx)
+            lmd_default = settings.get("ltx_models_dir", "") or resolve_ltx_models_dir(settings)
+            lmd = _ask("LTX models dir", lmd_default)
+            settings["ltx_models_dir"] = normalize_path(lmd)
+            _log(f"  LTX root:   {settings['ltx_root']}", log_fh)
+            _log(f"  LTX models: {settings['ltx_models_dir'] or '(not set)'}", log_fh)
+            _log("  (discovery/config only — no install/build/model download)", log_fh)
         elif action == "nuke":
             install_nuke_plugin(log_fh=log_fh)
         elif action == "comfyui":
@@ -734,6 +771,8 @@ def main() -> int:
                 settings["comfyui_node_mode"] = mode
         elif action == "omnipaint":
             install_omnipaint(log_fh=log_fh)
+        elif action == "models":
+            do_model_report(log_fh=log_fh)
         elif action == "sammie":
             sr = settings.get("sammie_root", "") or os.path.join(
                 os.path.expanduser("~"), "Sammie-Roto-2")

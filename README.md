@@ -98,6 +98,66 @@ events, and the final outcome.
 
 ## Install
 
+### Recommended installer
+
+Use the stdlib TUI installer from the repo root:
+
+```bash
+python3 tools/install.py
+```
+
+Useful non-interactive checks:
+
+```bash
+python3 tools/install.py --dry-run --yes
+python3 tools/install.py --log install.log
+```
+
+The installer is intentionally conservative. It:
+
+- adds one marked `nuke.pluginAddPath(...)` block to your user `~/.nuke/init.py`
+  after making a backup;
+- links `comfyui/nuke_bridge` into ComfyUI `custom_nodes/` by symlink, and if
+  symlink creation fails it tells you and copies the custom node instead;
+- runs the existing OmniPaint backend installer (`tools/install_omnipaint_local.sh`)
+  and then validates the model/runtime state;
+- clones or accepts an existing Sammie-Roto install and runs Sammie's own
+  installer (`install.sh`, `install_dependencies.sh`, or the Windows `.bat`
+  equivalents), including Sammie's own model-download/skip prompts;
+- discovers LTX Desktop and its model directory only — it does not install,
+  build, download LTX models, or prepopulate LTX projects.
+
+Central settings live at:
+
+```text
+~/.nuke/comfyui_bridge/settings.json
+```
+
+Environment overrides:
+
+```text
+COMFYUI_ROOT
+SAMMIE_ROOT
+LTX_ROOT
+LTX_MODELS_DIR
+LTX_APP_DATA_DIR
+NUKE_HOME_DIR
+```
+
+From Nuke, use:
+
+```text
+Nuke > AI Setup > Health Check
+Nuke > AI Setup > Model Health
+Nuke > AI Setup > Open Settings
+Nuke > AI Launchers > Sammie-Roto (selected footage)
+Nuke > AI Launchers > LTX Desktop
+```
+
+`Model Health` checks OmniPaint/FLUX/NF4 state. Fast health may report NF4 as
+`partial` until the full import check is run from the installer menu item
+**Check OmniPaint models**.
+
 ### Nuke side
 
 Add one plugin path entry to your user `~/.nuke/init.py`:
