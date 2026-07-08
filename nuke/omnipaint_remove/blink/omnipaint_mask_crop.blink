@@ -1,0 +1,58 @@
+kernel OmniPaintMaskCrop : ImageComputationKernel<ePixelWise>
+{
+  Image<eRead, eAccessRandom, eEdgeNone> src;
+  Image<eWrite> dst;
+
+  param:
+    int padding;
+
+  void define() {
+    defineParam(padding, "padding", 128);
+  }
+
+  void process(int2 pos) {
+    int src_x0 = src.bounds.x1;
+    int src_y0 = src.bounds.y1;
+    int src_x1 = src.bounds.x2;
+    int src_y1 = src.bounds.y2;
+
+    int min_x = src_x1;
+    int min_y = src_y1;
+    int max_x = -1;
+    int max_y = -1;
+
+    for (int y = src_y0; y < src_y1; y++) {
+      for (int x = src_x0; x < src_x1; x++) {
+        float a = src(x, y).w;
+        if (a > 0.001f) {
+          if (x < min_x) min_x = x;
+          if (y < min_y) min_y = y;
+          if (x > max_x) max_x = x;
+          if (y > max_y) max_y = y;
+        }
+      }
+    }
+
+    if (max_x < min_x || max_y < min_y) {
+      dst() = float4(0.0f, 0.0f, 0.0f, 0.0f);
+      return;
+    }
+
+    int bbox_w = max_x - min_x + 1;
+    int bbox_h = max_y - min_y + 1;
+    int side = max(1024, max(bbox_w, bbox_h) + padding * 2);
+    int cx = (min_x + max_x) / 2;
+    int cy = (min_y + max_y) / 2;
+    int crop_x0 = cx - side / 2;
+    int crop_y0 = cy - side / 2;
+
+    int sx = crop_x0 + (pos.x * side) / 1024;
+    int sy = crop_y0 + (pos.y * side) / 1024;
+    if (sx < src_x0 || sy < src_y0 || sx >= src_x1 || sy >= src_y1) {
+      dst() = float4(0.0f, 0.0f, 0.0f, 0.0f);
+      return;
+    }
+    float a = src(sx, sy).w;
+    dst() = float4(a, a, a, a);
+  }
+};

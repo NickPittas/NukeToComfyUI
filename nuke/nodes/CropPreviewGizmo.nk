@@ -1,0 +1,186 @@
+#! /opt/Nuke17.0v2/libnuke-17.0.2.so -nx
+version 17.0 v2
+define_window_layout_xml {<?xml version="1.0" encoding="UTF-8"?>
+<layout version="1.0">
+    <window x="0" y="299" w="2360" h="1654" screen="0">
+        <splitter orientation="1">
+            <split size="1552"/>
+            <splitter orientation="1">
+                <split size="41"/>
+                <dock id="" hideTitles="1" activePageId="Toolbar.1">
+                    <page id="Toolbar.1"/>
+                </dock>
+                <split size="1507"/>
+                <splitter orientation="2">
+                    <split size="805"/>
+                    <dock id="" activePageId="Viewer.1">
+                        <page id="Viewer.1"/>
+                    </dock>
+                    <split size="804"/>
+                    <dock id="" activePageId="DAG.1">
+                        <page id="Curve Editor.1"/>
+                        <page id="DopeSheet.1"/>
+                        <page id="DAG.1"/>
+                    </dock>
+                </splitter>
+            </splitter>
+            <split size="804"/>
+            <splitter orientation="2">
+                <split size="1299"/>
+                <dock id="" activePageId="Properties.1">
+                    <page id="Properties.1"/>
+                    <page id="com.codex.TaskManager"/>
+                </dock>
+                <split size="310"/>
+                <dock id="" activePageId="Progress.1">
+                    <page id="Progress.1"/>
+                </dock>
+            </splitter>
+        </splitter>
+    </window>
+</layout>
+}
+Root {
+ inputs 0
+ gsv  {
+  __default__ {
+  }
+  __panel__ {
+   tab {Main}
+  }
+ 
+}
+ name /home/npittas/.nuke/inpaint/nuke/nodes/CropPreviewGizmo.nk
+ fps 25
+ format "1920 1080 0 0 1920 1080 1 HD_1080"
+ proxy_type scale
+ proxy_format "1024 778 0 0 1024 778 1 1K_Super_35(full-ap)"
+ colorManagement Nuke
+ workingSpaceLUT linear
+ monitorLut sRGB
+ monitorOutLUT rec709
+ int8Lut sRGB
+ int16Lut sRGB
+ logLut Cineon
+ floatLut linear
+}
+Input {
+ inputs 0
+ name Image
+ xpos 180
+ ypos -322
+ number 1
+}
+Dot {
+ name Dot2
+ xpos 214
+ ypos -222
+}
+set N302b8150 [stack 0]
+Input {
+ inputs 0
+ name Mask
+ xpos 70
+ ypos -322
+}
+Switch {
+ inputs 2
+ name Switch1
+ xpos 70
+ ypos -226
+}
+Shuffle2 {
+ fromInput1 {
+  {0}
+  B
+ }
+ fromInput2 {
+  {0}
+  B
+ }
+ mappings "4 rgba.alpha 0 3 rgba.alpha 0 3 rgba.alpha 0 3 rgba.red 0 0 rgba.alpha 0 3 rgba.green 0 1 rgba.alpha 0 3 rgba.blue 0 2"
+ name ShuffleAlphaToRGB
+ xpos 70
+ ypos -130
+}
+CurveTool {
+ operation "Auto Crop"
+ ROI {0 0 1920 1080}
+ autocropdata {{curve x1 932} {curve x1 0} {curve x1 1904} {curve x1 845}}
+ intensitydata {{curve x1 0.0868136842} {curve x1 0.0868136842} {curve x1 0.0868136842} {curve x1 0.0868136842}}
+ name CurveTool1
+ xpos 70
+ ypos -82
+}
+Crop {
+ box {{"CurveTool1.autocropdata.x - (max(1024, max(CurveTool1.autocropdata.r - CurveTool1.autocropdata.x, CurveTool1.autocropdata.t - CurveTool1.autocropdata.y)) - (CurveTool1.autocropdata.r - CurveTool1.autocropdata.x)) / 2"} {"CurveTool1.autocropdata.y - (max(1024, max(CurveTool1.autocropdata.r - CurveTool1.autocropdata.x, CurveTool1.autocropdata.t - CurveTool1.autocropdata.y)) - (CurveTool1.autocropdata.t - CurveTool1.autocropdata.y)) / 2"} {"CurveTool1.autocropdata.x - (max(1024, max(CurveTool1.autocropdata.r - CurveTool1.autocropdata.x, CurveTool1.autocropdata.t - CurveTool1.autocropdata.y)) - (CurveTool1.autocropdata.r - CurveTool1.autocropdata.x)) / 2 + max(1024, max(CurveTool1.autocropdata.r - CurveTool1.autocropdata.x, CurveTool1.autocropdata.t - CurveTool1.autocropdata.y))"} {"CurveTool1.autocropdata.y - (max(1024, max(CurveTool1.autocropdata.r - CurveTool1.autocropdata.x, CurveTool1.autocropdata.t - CurveTool1.autocropdata.y)) - (CurveTool1.autocropdata.t - CurveTool1.autocropdata.y)) / 2 + max(1024, max(CurveTool1.autocropdata.r - CurveTool1.autocropdata.x, CurveTool1.autocropdata.t - CurveTool1.autocropdata.y))"}}
+ reformat true
+ name CropMask
+ xpos 70
+ ypos -34
+}
+Write {
+ file_type png
+ checkHashOnRead false
+ ocioColorspace scene_linear
+ display default
+ view sRGB
+ name WriteMask
+ xpos 70
+ ypos 62
+}
+push $N302b8150
+Crop {
+ box {{"CurveTool1.autocropdata.x - (max(1024, max(CurveTool1.autocropdata.r - CurveTool1.autocropdata.x, CurveTool1.autocropdata.t - CurveTool1.autocropdata.y)) - (CurveTool1.autocropdata.r - CurveTool1.autocropdata.x)) / 2"} {"CurveTool1.autocropdata.y - (max(1024, max(CurveTool1.autocropdata.r - CurveTool1.autocropdata.x, CurveTool1.autocropdata.t - CurveTool1.autocropdata.y)) - (CurveTool1.autocropdata.t - CurveTool1.autocropdata.y)) / 2"} {"CurveTool1.autocropdata.x - (max(1024, max(CurveTool1.autocropdata.r - CurveTool1.autocropdata.x, CurveTool1.autocropdata.t - CurveTool1.autocropdata.y)) - (CurveTool1.autocropdata.r - CurveTool1.autocropdata.x)) / 2 + max(1024, max(CurveTool1.autocropdata.r - CurveTool1.autocropdata.x, CurveTool1.autocropdata.t - CurveTool1.autocropdata.y))"} {"CurveTool1.autocropdata.y - (max(1024, max(CurveTool1.autocropdata.r - CurveTool1.autocropdata.x, CurveTool1.autocropdata.t - CurveTool1.autocropdata.y)) - (CurveTool1.autocropdata.t - CurveTool1.autocropdata.y)) / 2 + max(1024, max(CurveTool1.autocropdata.r - CurveTool1.autocropdata.x, CurveTool1.autocropdata.t - CurveTool1.autocropdata.y))"}}
+ reformat true
+ name CropRGB
+ xpos 180
+ ypos -34
+}
+Write {
+ file_type png
+ checkHashOnRead false
+ ocioColorspace scene_linear
+ display default
+ view sRGB
+ name WriteRGB
+ xpos 180
+ ypos 62
+}
+Constant {
+ inputs 0
+ channels rgb
+ color {1 0 0 0}
+ color_panelDropped true
+ format "1024 1024 0 0 1024 1024 1 square_1K"
+ name RedOverlay
+ xpos 620
+ ypos -130
+}
+Transform {
+ translate {{parent.CropMask.box.x} {parent.CropMask.box.y}}
+ center {512 512}
+ name OverlayPositionTransform1
+ xpos 620
+ ypos -34
+}
+push $N302b8150
+Dot {
+ name Dot3
+ xpos 434
+ ypos -222
+}
+Merge2 {
+ inputs 2
+ mix 0.104
+ name MergeRedCrop
+ label "\[value bbox]\nmix \[value mix]"
+ selected true
+ xpos 400
+ ypos -48
+}
+Output {
+ name Preview
+ xpos 400
+ ypos 182
+}

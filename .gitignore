@@ -3,3 +3,13 @@ __pycache__/
 /.pytest_cache/
 /.mypy_cache/
 /.ruff_cache/
+.slim/deepwork/
+# BEGIN oh-my-opencode-slim clonedeps
+.slim/clonedeps/repos/
+# END oh-my-opencode-slim clonedeps
+# quantized-FLUX test scaffold: isolated venv (bitsandbytes wheels) + generated outputs
+.slim/quant_test/venv/
+.slim/quant_test/*.png
+error.txt
+*.dmp
+crashreportmeta.json

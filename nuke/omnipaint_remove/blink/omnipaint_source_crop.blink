@@ -1,0 +1,28 @@
+kernel OmniPaintSourceCrop : ImageComputationKernel<ePixelWise>
+{
+  Image<eRead, eAccessRandom, eEdgeClamped> src;
+  Image<eWrite> dst;
+
+  param:
+    int crop_x0;
+    int crop_y0;
+    int crop_x1;
+    int crop_y1;
+
+  void define() {
+    defineParam(crop_x0, "crop_x0", 0);
+    defineParam(crop_y0, "crop_y0", 0);
+    defineParam(crop_x1, "crop_x1", 1024);
+    defineParam(crop_y1, "crop_y1", 1024);
+  }
+
+  void process(int2 pos) {
+    int cw = crop_x1 - crop_x0;
+    int ch = crop_y1 - crop_y0;
+    if (cw <= 0 || ch <= 0) { dst() = float4(0.0f, 0.0f, 0.0f, 0.0f); return; }
+
+    int sx = crop_x0 + (pos.x * cw) / 1024;
+    int sy = crop_y0 + (pos.y * ch) / 1024;
+    dst() = src(sx, sy);
+  }
+};

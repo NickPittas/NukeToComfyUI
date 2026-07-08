@@ -1,0 +1,10 @@
+kernel OPTestSource : ImageComputationKernel<ePixelWise>
+{
+  Image<eWrite> dst;
+  void process(int2 pos) {
+    float r = float((pos.x / 64) % 2);
+    float g = float((pos.y / 64) % 2);
+    float b = float(((pos.x + pos.y) / 128) % 2);
+    dst() = float4(r, g, b, 1.0f);
+  }
+};
