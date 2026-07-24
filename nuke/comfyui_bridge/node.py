@@ -143,7 +143,35 @@ def _knob_specs() -> List[Tuple[str, Callable[[Any], Any]]]:
                 "node.refresh_video_colorspace_choices(nuke.thisNode())",
             ),
         ),
+        (
+            "run_selected_workflow_video",
+            lambda n: _pyscript(
+                n, "run_selected_workflow_video", "Run selected workflow",
+                "from comfyui_bridge import workflow_selection; "
+                "workflow_selection.run_selected_workflow(nuke.thisNode())",
+            ),
+        ),
     ]
+
+
+def _apply_layout(node: Any, nuke: Any) -> None:
+    """Set width/row flags on layout knobs. Applies to new and saved nodes."""
+    try:
+        wf = node.knob("workflow_choices")
+        if wf is not None and hasattr(wf, "setWidth"):
+            wf.setWidth(400)
+    except Exception:
+        pass
+    startline = getattr(nuke, "STARTLINE", None)
+    if startline is None:
+        return
+    for name in ("run_selected_workflow", "run_selected_workflow_video"):
+        try:
+            k = node.knob(name)
+            if k is not None:
+                k.setFlag(startline)
+        except Exception:
+            pass
 
 
 def _append_all_knobs(group_node: Any, nuke: Any) -> None:
@@ -152,6 +180,7 @@ def _append_all_knobs(group_node: Any, nuke: Any) -> None:
         knob = builder(nuke)
         if knob is not None:
             group_node.addKnob(knob)
+    _apply_layout(group_node, nuke)
 
 
 def build_knobs(group_node: Any) -> None:
@@ -179,6 +208,7 @@ def ensure_knobs(node: Any) -> None:
         except Exception:
             # Never let one bad knob break node creation.
             pass
+    _apply_layout(node, nuke)
 
 
 def write_colorspaces(nuke: Any) -> List[str]:
