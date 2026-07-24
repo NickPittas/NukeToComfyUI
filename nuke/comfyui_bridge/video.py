@@ -32,7 +32,10 @@ def _set_enum_by_alias(knob: Any, aliases: tuple[str, ...]) -> str:
         for value in values:
             v = _norm(value)
             if a and (a in v or v in a):
-                knob.setValue(value)
+                token = value.split("\t", 1)[0].strip()
+                if not token:
+                    continue
+                knob.setValue(token)
                 return value
     raise RuntimeError(f"could not match {aliases!r}; available: {values!r}")
 

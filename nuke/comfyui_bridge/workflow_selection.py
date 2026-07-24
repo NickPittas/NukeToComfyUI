@@ -246,6 +246,8 @@ def _patch_nuke_bridge_prompt(prompt: Any, bridge_node: Any, video_bundle: Optio
         video_codec = "prores_422hq"
     video_colorspace = str(napi.knob_value(bridge_node, "video_colorspace") or "")
 
+    video_meta_json = json.dumps({**(video_bundle.get("metadata") or {}), "main_path": video_bundle["main_path"]}) if video_bundle else "{}"
+
     patched = copy.deepcopy(prompt)
     for node in (patched or {}).values() if isinstance(patched, dict) else []:
         if not isinstance(node, dict):
@@ -265,5 +267,7 @@ def _patch_nuke_bridge_prompt(prompt: Any, bridge_node: Any, video_bundle: Optio
                 if class_type == "FromNukeVideo" and video_bundle:
                     inputs["main_path"] = video_bundle["main_path"]
                     inputs["mask_path"] = video_bundle["mask_path"]
-                    inputs["metadata_json"] = json.dumps(video_bundle.get("metadata") or {})
+                    inputs["metadata_json"] = video_meta_json
+                elif class_type == "ToNukeVideo" and video_bundle:
+                    inputs["video_meta_json"] = video_meta_json
     return patched

@@ -33,6 +33,8 @@ def _format_value(value: Any) -> str:
 def _colorspace_value(value: Any) -> str:
     """Normalize colorspace; old workflows may shift timeout=30 into this slot."""
     cs = str(value or "").strip()
+    if cs.lower() in ("", "default"):
+        return ""
     try:
         float(cs)
         return ""
@@ -40,8 +42,34 @@ def _colorspace_value(value: Any) -> str:
         return cs
 
 
+class _VideoProgress:
+    """Print [NukeBridge] <stage> on stage changes; drive comfy ProgressBar to total."""
+
+    def __init__(self, total: int | None):
+        self._total = total
+        self._stage = None
+        self._bar = None
+        if total:
+            try:
+                from comfy.utils import ProgressBar
+                self._bar = ProgressBar(total)
+            except Exception:
+                self._bar = None  # standalone / test context: no server hook
+
+    def __call__(self, completed, total, stage):
+        if stage != self._stage:
+            print(f"[NukeBridge] {stage}", flush=True)
+            self._stage = stage
+        if self._bar is not None and completed is not None and total:
+            self._bar.update_absolute(min(completed, total), total)
+
+
 class FromNuke:
     """Pull a frame from a Nuke ComfyUIBridge node."""
+
+    @classmethod
+    def VALIDATE_INPUTS(cls, colorspace: str) -> bool:
+        return True
 
     @staticmethod
     def INPUT_TYPES(cls_dict: Dict[str, Any] | None = None) -> Dict[str, Any]:
@@ -53,7 +81,7 @@ class FromNuke:
                 "frame": ("INT", {"default": -1, "min": -1, "max": 2**31 - 1}),
                 "format": (["png8", "exr16"], {"default": "png8"}),
                 "timeout": ("FLOAT", {"default": 30.0, "min": 1.0, "max": 600.0}),
-                "colorspace": ("STRING", {"default": "", "multiline": False}),
+                "colorspace": (["default", "raw", "sRGB", "rec709"], {"default": "default"}),
             },
             "optional": {},
         }
@@ -115,6 +143,10 @@ class FromNuke:
 class ToNuke:
     """Send an IMAGE back to a Nuke ComfyUIBridge node's /result."""
 
+    @classmethod
+    def VALIDATE_INPUTS(cls, colorspace: str) -> bool:
+        return True
+
     @staticmethod
     def INPUT_TYPES(cls_dict: Dict[str, Any] | None = None) -> Dict[str, Any]:
         return {
@@ -126,7 +158,7 @@ class ToNuke:
                 "filename_prefix": ("STRING", {"default": "comfy_result"}),
                 "format": (["png8", "exr16"], {"default": "png8"}),
                 "timeout": ("FLOAT", {"default": 30.0, "min": 1.0, "max": 600.0}),
-                "colorspace": ("STRING", {"default": "", "multiline": False}),
+                "colorspace": (["default", "raw", "sRGB", "rec709"], {"default": "default"}),
             }
         }
 
@@ -169,6 +201,10 @@ class ToNuke:
 class FromNukeVideo:
     """Pull a video bundle from a Nuke ComfyUIBridge node."""
 
+    @classmethod
+    def VALIDATE_INPUTS(cls, colorspace: str) -> bool:
+        return True
+
     @staticmethod
     def INPUT_TYPES(cls_dict: Dict[str, Any] | None = None) -> Dict[str, Any]:
         return {"required": {
@@ -180,12 +216,12 @@ class FromNukeVideo:
             "fps": ("FLOAT", {"default": 24.0, "min": 1.0, "max": 240.0}),
             "format": (["mov", "mp4"], {"default": "mov"}),
             "mov_codec": (["prores_422hq", "prores_4444"], {"default": "prores_422hq"}),
-            "colorspace": ("STRING", {"default": "", "multiline": False}),
+            "colorspace": (["default", "raw", "sRGB", "rec709"], {"default": "default"}),
             "timeout": ("FLOAT", {"default": 120.0, "min": 1.0, "max": 3600.0}),
         }, "optional": {
-            "main_path": ("STRING", {"default": "", "multiline": False}),
-            "mask_path": ("STRING", {"default": "", "multiline": False}),
-            "metadata_json": ("STRING", {"default": "{}", "multiline": True}),
+            "main_path": ("STRING", {"default": "", "multiline": False, "forceInput": True, "socketless": True}),
+            "mask_path": ("STRING", {"default": "", "multiline": False, "forceInput": True, "socketless": True}),
+            "metadata_json": ("STRING", {"default": "{}", "multiline": True, "forceInput": True, "socketless": True}),
         }}
 
     RETURN_TYPES = ("IMAGE", "MASK", "STRING", "INT", "INT", "INT", "FLOAT")
@@ -201,12 +237,20 @@ class FromNukeVideo:
         if not os.path.isfile(mask_path):
             raise RuntimeError(f"FromNukeVideo: missing mask_path {mask_path!r}")
         meta = json.loads(metadata_json or "{}")
-        image, mask, width, height, frame_count = video_io.decode_video(main_path, mask_path)
+        expected = int(meta["frame_count"]) if meta.get("frame_count") else None
+        report = _VideoProgress(2 * expected + 1 if expected else None)
+        image, mask, width, height, frame_count = video_io.decode_video(
+            main_path, mask_path, expected_frames=expected, progress_cb=report
+        )
         return image, mask, json.dumps(meta), width, height, frame_count, float(meta.get("fps") or fps)
 
 
 class ToNukeVideo:
     """Send an IMAGE batch back to Nuke as mp4/mov."""
+
+    @classmethod
+    def VALIDATE_INPUTS(cls, colorspace: str) -> bool:
+        return True
 
     @staticmethod
     def INPUT_TYPES(cls_dict: Dict[str, Any] | None = None) -> Dict[str, Any]:
@@ -215,11 +259,11 @@ class ToNukeVideo:
             "bridge_id": ("STRING", {"default": "", "multiline": False}),
             "host": ("STRING", {"default": "127.0.0.1"}),
             "port": ("INT", {"default": 8765, "min": 1, "max": 65535}),
-            "video_meta_json": ("STRING", {"default": "{}", "multiline": True}),
+            "video_meta_json": ("STRING", {"default": "{}", "multiline": True, "forceInput": True, "socketless": True}),
             "filename_prefix": ("STRING", {"default": "comfy_video_result"}),
             "format_override": (["auto", "mp4", "mov"], {"default": "auto"}),
             "mov_codec_override": (["auto", "prores_422hq", "prores_4444"], {"default": "auto"}),
-            "colorspace": ("STRING", {"default": "", "multiline": False}),
+            "colorspace": (["default", "raw", "sRGB", "rec709"], {"default": "default"}),
             "timeout": ("FLOAT", {"default": 120.0, "min": 1.0, "max": 3600.0}),
         }}
 
@@ -243,9 +287,12 @@ class ToNukeVideo:
         fps = float(meta.get("fps") or 24.0)
         first = int(meta.get("frame_start") or 1)
         last = first + int(image.shape[0]) - 1
+        source_meta = video_io.probe_source_meta(str(meta.get("main_path") or ""))
+        B = int(image.shape[0])
+        report = _VideoProgress(B + 3)
         with tempfile.TemporaryDirectory(prefix="nuke_bridge_video_result_") as tmp:
             path = os.path.join(tmp, "result.mov" if fmt == "mov" else "result.mp4")
-            video_io.encode_video(image, path, fmt, mov_codec, fps)
+            video_io.encode_video(image, path, fmt, mov_codec, fps, source_meta=source_meta, progress_cb=report, extra_steps=2)
             with open(path, "rb") as fh:
                 body = fh.read()
         headers = {
@@ -260,7 +307,9 @@ class ToNukeVideo:
         cs = _colorspace_value(colorspace)
         if cs:
             headers["X-NukeBridge-Colorspace"] = cs
+        report(B + 2, B + 3, f"uploading {len(body) / (1024 * 1024):.1f} MiB to Nuke")
         resp = requests.post(f"{_base_url(host, port)}/bridge/{_bridge_path_id(bridge_id)}/video_result", data=body, headers=headers, timeout=float(timeout))
         if resp.status_code != 200:
             raise RuntimeError(f"ToNukeVideo: Nuke /video_result returned {resp.status_code}: {resp.text[:300]}")
+        report(B + 3, B + 3, "complete")
         return (image,)
