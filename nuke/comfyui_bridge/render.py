@@ -1,22 +1,15 @@
 """On-demand frame rendering for /frame requests.
 
-Phase 1 PNG8 RGBA: all four mask modes implemented; PIL composes mask-input
-alpha into the carrier.
-
-Phase 2 EXR16: half-float RGBA EXR via a temporary Nuke Write node.
-  - source alpha / invert source alpha: native EXR write of a tiny in-Nuke
-    tree, with the same carrier direction as PNG.
-  - mask input / invert mask input: EXR-side channel compose would need Nuke
-    Copy/Shuffle knob names we can't verify here, so this path degrades to the
-    PNG compose + returns actual_format='png8'. Robust and minimal; documented
-    in README.
+All four mask modes are composed in-tree with Nuke nodes (Copy, Invert,
+Expression) — no PIL, no numpy, no Python pixel manipulation. EXR16 and
+PNG8 both use the same node-tree approach; mask-input modes no longer
+degrade to PNG.
 
 All Nuke API access is on the main thread via `napi`.
 """
 
 from __future__ import annotations
 
-import io
 import os
 import tempfile
 import threading
@@ -209,71 +202,41 @@ def _write_exr(nuke: Any, src_node: Any, tmp_path: str, frame: int, temp_nodes: 
     nuke.execute(write, frame, frame)
 
 
-def _pil_replace_alpha(source_png: bytes, mask_png: Optional[bytes], invert: bool) -> bytes:
-    """Return `source_png` with its alpha replaced by the mask carrier alpha.
+def _mask_chain(nuke: Any, bridge_node: Any, mask_source: str, temp_nodes: list) -> Any:
+    """Build the in-tree mask composition chain. Returns the output node.
 
-    `mask_png=None` means all-keep (carrier alpha = 1 everywhere).
-    Otherwise the mask is taken from the mask PNG's alpha channel if it has
-    meaningful variation, else from its luma (RGB average).
+    All four mask modes use Nuke nodes only — no PIL, no numpy.
     """
-    from PIL import Image  # local import; only needed on this path
-    import numpy as np
+    src = bridge_node.input(0)
+    if src is None:
+        raise napi.NukeError("ComfyUIBridge input 0 is not connected")
 
-    base = Image.open(io.BytesIO(source_png)).convert("RGBA")
-    arr = np.asarray(base).astype(np.float32)
-    h, w = arr.shape[0], arr.shape[1]
+    chain = src
 
-    if mask_png is None:
-        carrier = np.ones((h, w), dtype=np.float32)
-    else:
-        mimg = Image.open(io.BytesIO(mask_png))
-        if mimg.mode not in ("RGBA", "RGB", "L"):
-            mimg = mimg.convert("RGBA")
-        marr = np.asarray(mimg).astype(np.float32) / 255.0
-        mh, mw = marr.shape[0], marr.shape[1]
-        if (mh, mw) != (h, w):
-            resample = getattr(Image, "BILINEAR", 2)
-            mimg = mimg.resize((w, h), resample)
-            marr = np.asarray(mimg).astype(np.float32) / 255.0
-            mh, mw = h, w
-
-        # ponytail: "alpha if present" => mask PNG has an alpha channel that
-        # actually varies across the image; otherwise treat as RGB mask and
-        # use luma. A uniformly-opaque alpha means the source was effectively
-        # RGB and luma is the meaningful signal.
-        has_alpha = (
-            marr.ndim == 3
-            and marr.shape[2] == 4
-            and float(marr[..., 3].max() - marr[..., 3].min()) > 1.0 / 255.0
-        )
-        if has_alpha:
-            carrier = marr[..., 3]
-        elif marr.ndim == 3:
-            carrier = marr[..., :3].mean(axis=2)
+    if mask_source == "invert source alpha":
+        inv = nuke.nodes.Invert(inputs=[chain], channels="alpha")
+        temp_nodes.append(inv)
+        chain = inv
+    elif mask_source in ("mask input", "invert mask input"):
+        mask_input = bridge_node.input(1)
+        if mask_input is not None:
+            copy = nuke.nodes.Copy(inputs=[chain, mask_input])
+            copy.knob("from0").setValue("alpha")
+            copy.knob("to0").setValue("alpha")
+            temp_nodes.append(copy)
+            chain = copy
         else:
-            carrier = marr
+            # Disconnected mask: all-keep (carrier alpha = 1).
+            expr = nuke.nodes.Expression(inputs=[chain])
+            expr.knob("expr3").setValue("1")
+            temp_nodes.append(expr)
+            chain = expr
+        if mask_source == "invert mask input":
+            inv = nuke.nodes.Invert(inputs=[chain], channels="alpha")
+            temp_nodes.append(inv)
+            chain = inv
 
-    if invert:
-        carrier = 1.0 - carrier
-
-    arr[..., 3] = carrier * 255.0
-    out = Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8), mode="RGBA")
-    buf = io.BytesIO()
-    out.save(buf, format="PNG")
-    return buf.getvalue()
-
-
-def _pil_invert_alpha(source_png: bytes) -> bytes:
-    from PIL import Image
-    import numpy as np
-
-    img = Image.open(io.BytesIO(source_png)).convert("RGBA")
-    arr = np.asarray(img).copy()
-    arr[..., 3] = 255 - arr[..., 3]
-    out = Image.fromarray(arr, mode="RGBA")
-    buf = io.BytesIO()
-    out.save(buf, format="PNG")
-    return buf.getvalue()
+    return chain
 
 
 def render_frame_png(
@@ -287,7 +250,6 @@ def render_frame_png(
     Returns (png_bytes, width, height).
     """
     nuke: Any = napi._nuke
-    is_mask_mode = mask_source in ("mask input", "invert mask input")
     key = _cache_key(bridge_node, frame, mask_source, colorspace, "png8")
     cached = _cache_get(key)
     if cached is not None:
@@ -302,41 +264,20 @@ def render_frame_png(
     ).name
 
     try:
-        def _render() -> Tuple[bytes, Optional[bytes], int, int]:
+        def _render() -> Tuple[bytes, int, int]:
             src = bridge_node.input(0)
             if src is None:
                 raise napi.NukeError("ComfyUIBridge input 0 is not connected")
 
             temp_nodes: list = []
             try:
-                chain = src
-
+                chain = _mask_chain(nuke, bridge_node, mask_source, temp_nodes)
                 _write_png(nuke, chain, src_path, frame, temp_nodes, colorspace)
                 fmt = src.format()
                 width, height = int(fmt.width()), int(fmt.height())
-
-                mask_png: Optional[bytes] = None
-                if is_mask_mode:
-                    mask_input = bridge_node.input(1)
-                    if mask_input is not None:
-                        mask_path = tempfile.NamedTemporaryFile(
-                            prefix="comfyui_bridge_mask_", suffix=".png", delete=False
-                        ).name
-                        try:
-                            _write_png(nuke, mask_input, mask_path, frame, temp_nodes, colorspace)
-                            with open(mask_path, "rb") as fh:
-                                mask_png = fh.read()
-                        finally:
-                            try:
-                                os.remove(mask_path)
-                            except OSError:
-                                pass
-                    # mask_png stays None for the all-keep disconnected case.
-
                 with open(src_path, "rb") as fh:
-                    src_png = fh.read()
-
-                return src_png, mask_png, width, height
+                    data = fh.read()
+                return data, width, height
             finally:
                 for node in reversed(temp_nodes):
                     try:
@@ -344,15 +285,7 @@ def render_frame_png(
                     except Exception:
                         pass
 
-        src_png, mask_png, width, height = napi.call(_render)
-
-        if mask_source == "invert source alpha":
-            data = _pil_invert_alpha(src_png)
-        elif is_mask_mode:
-            data = _pil_replace_alpha(src_png, mask_png, invert=mask_source == "invert mask input")
-        else:
-            data = src_png
-
+        data, width, height = napi.call(_render)
         _cache_set(key, data, width, height)
         try:
             napi.set_knob_value(bridge_node, "status", f"exported frame {frame}")
@@ -401,16 +334,10 @@ def render_frame_exr(
 
             temp_nodes: list = []
             try:
-                chain = src
-                if mask_source == "invert source alpha":
-                    inv = nuke.nodes.Invert(inputs=[chain], channels="alpha")
-                    temp_nodes.append(inv)
-                    chain = inv
-
+                chain = _mask_chain(nuke, bridge_node, mask_source, temp_nodes)
                 _write_exr(nuke, chain, src_path, frame, temp_nodes, colorspace)
                 fmt = src.format()
                 width, height = int(fmt.width()), int(fmt.height())
-
                 with open(src_path, "rb") as fh:
                     exr = fh.read()
                 return exr, width, height
@@ -449,21 +376,10 @@ def render_frame(
     mode degrades to png8).
     """
     fmt = (fmt or "png8").strip().lower()
-    is_mask_mode = mask_source in ("mask input", "invert mask input")
 
-    if fmt == "exr16" and not is_mask_mode:
+    if fmt == "exr16":
         data, w, h = render_frame_exr(bridge_node, frame, mask_source, colorspace)
         return data, w, h, "exr16"
 
-    # Default / fallback: PNG path (also handles exr16 + mask-input modes).
     data, w, h = render_frame_png(bridge_node, frame, mask_source, colorspace)
-    actual = "png8" if (fmt != "exr16" or is_mask_mode) else fmt
-    if fmt == "exr16" and is_mask_mode:
-        try:
-            napi.set_knob_value(
-                bridge_node, "status",
-                "exr16 + mask input: PNG fallback (no in-tree compose)",
-            )
-        except Exception:
-            pass
-    return data, w, h, actual
+    return data, w, h, "png8"
