@@ -34,6 +34,16 @@ MASK_SOURCES = (
 SEND_FORMATS = ("png8", "exr16")  # Phase 2: half-float EXR transport
 VIDEO_FORMATS = ("mov", "mp4")
 VIDEO_MOV_CODECS = ("prores_422hq", "prores_4444")
+_RUN_IMAGE_LABEL = "Run selected image workflow"
+_RUN_VIDEO_LABEL = "Run selected video workflow"
+_RUN_IMAGE_COMMAND = (
+    "from comfyui_bridge import workflow_selection; "
+    "workflow_selection.run_selected_workflow(nuke.thisNode(), media_mode='image')"
+)
+_RUN_VIDEO_COMMAND = (
+    "from comfyui_bridge import workflow_selection; "
+    "workflow_selection.run_selected_workflow(nuke.thisNode(), media_mode='video')"
+)
 
 
 def _new_bridge_id() -> str:
@@ -123,9 +133,7 @@ def _knob_specs() -> List[Tuple[str, Callable[[Any], Any]]]:
         (
             "run_selected_workflow",
             lambda n: _pyscript(
-                n, "run_selected_workflow", "Run selected workflow",
-                "from comfyui_bridge import workflow_selection; "
-                "workflow_selection.run_selected_workflow(nuke.thisNode())",
+                n, "run_selected_workflow", _RUN_IMAGE_LABEL, _RUN_IMAGE_COMMAND,
             ),
         ),
         ("Video", lambda n: n.Tab_Knob("Video")),
@@ -146,9 +154,7 @@ def _knob_specs() -> List[Tuple[str, Callable[[Any], Any]]]:
         (
             "run_selected_workflow_video",
             lambda n: _pyscript(
-                n, "run_selected_workflow_video", "Run selected workflow",
-                "from comfyui_bridge import workflow_selection; "
-                "workflow_selection.run_selected_workflow(nuke.thisNode())",
+                n, "run_selected_workflow_video", _RUN_VIDEO_LABEL, _RUN_VIDEO_COMMAND,
             ),
         ),
     ]
@@ -163,13 +169,18 @@ def _apply_layout(node: Any, nuke: Any) -> None:
     except Exception:
         pass
     startline = getattr(nuke, "STARTLINE", None)
-    if startline is None:
-        return
-    for name in ("run_selected_workflow", "run_selected_workflow_video"):
+    for name, label, command in (
+        ("run_selected_workflow", _RUN_IMAGE_LABEL, _RUN_IMAGE_COMMAND),
+        ("run_selected_workflow_video", _RUN_VIDEO_LABEL, _RUN_VIDEO_COMMAND),
+    ):
         try:
             k = node.knob(name)
             if k is not None:
-                k.setFlag(startline)
+                if startline is not None:
+                    k.setFlag(startline)
+                k.setValue(command)
+                if hasattr(k, "setLabel"):
+                    k.setLabel(label)
         except Exception:
             pass
 

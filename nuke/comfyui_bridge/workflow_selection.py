@@ -137,22 +137,36 @@ def _selected_workflow_id(bridge_node: Any) -> Optional[str]:
     return str(wid) if wid else None
 
 
-def run_selected_workflow(bridge_node: Any, timeout: float = 30.0) -> Optional[Dict[str, Any]]:
-    """PyScript entrypoint: run the workflow chosen in `workflow_choices`."""
+def _media_mode(value: str) -> str:
+    mode = str(value or "").strip().lower()
+    if mode not in ("image", "video"):
+        raise ValueError(f"invalid workflow media mode: {value!r}")
+    return mode
+
+
+def run_selected_workflow(
+    bridge_node: Any, timeout: float = 30.0, media_mode: str = "image"
+) -> Optional[Dict[str, Any]]:
+    """Run the selected image or video workflow."""
     from . import napi
 
+    mode = _media_mode(media_mode)
+
     def _worker() -> None:
-        _run_selected_workflow_sync(bridge_node, timeout=timeout)
+        _run_selected_workflow_sync(bridge_node, timeout=timeout, media_mode=mode)
 
-    napi.set_knob_value(bridge_node, "status", "workflow starting…")
+    napi.set_knob_value(bridge_node, "status", f"{mode} workflow starting…")
     threading.Thread(target=_worker, name="ComfyUIBridgeRunSelected", daemon=True).start()
-    return {"status": "started"}
+    return {"status": "started", "media_mode": mode}
 
 
-def _run_selected_workflow_sync(bridge_node: Any, timeout: float = 30.0) -> Optional[Dict[str, Any]]:
+def _run_selected_workflow_sync(
+    bridge_node: Any, timeout: float = 30.0, media_mode: str = "image"
+) -> Optional[Dict[str, Any]]:
     """Worker-thread implementation for run_selected_workflow."""
     from . import napi
 
+    mode = _media_mode(media_mode)
     wid = _selected_workflow_id(bridge_node)
     if not wid:
         napi.set_knob_value(bridge_node, "status", "no workflow selected")
@@ -162,11 +176,13 @@ def _run_selected_workflow_sync(bridge_node: Any, timeout: float = 30.0) -> Opti
     port = int(napi.knob_value(bridge_node, "comfyui_port") or 8188)
     client_id = uuid.uuid4().hex
 
-    try:
-        video_bundle = _render_video_bundle_before_comfy(bridge_node)
-    except Exception as exc:
-        napi.set_knob_value(bridge_node, "status", f"video render failed: {exc}")
-        return None
+    video_bundle = None
+    if mode == "video":
+        try:
+            video_bundle = _render_video_bundle_before_comfy(bridge_node)
+        except Exception as exc:
+            napi.set_knob_value(bridge_node, "status", f"video render failed: {exc}")
+            return None
 
     try:
         data = _request_json(
