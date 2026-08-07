@@ -32,47 +32,33 @@ def clear_cache() -> None:
 
 
 def clear_cache_from_node(bridge_node: Any = None) -> None:
-    """PyScript_Knob entrypoint: clear cached frame/video exports."""
+    """PyScript_Knob entrypoint: clear cached frame/video exports and session files.
+
+    Session cleanup deletes only files tracked by this process (exact paths),
+    never a directory scan.
+    """
     clear_cache()
     try:
         from . import video
         video.clear_cache()
     except Exception:
         pass
-    removed = _clear_video_exports(bridge_node) if bridge_node is not None else 0
+    removed, failed = 0, 0
+    try:
+        from . import session_files
+        removed, failed = session_files.clear()
+    except Exception:
+        pass
     if bridge_node is not None:
         try:
-            msg = "frame cache cleared"
+            parts = ["frame cache cleared"]
             if removed:
-                msg += f"; removed {removed} video file(s)"
-            napi.set_knob_value(bridge_node, "status", msg)
+                parts.append(f"removed {removed} file(s)")
+            if failed:
+                parts.append(f"{failed} failed, kept for retry")
+            napi.set_knob_value(bridge_node, "status", "; ".join(parts))
         except Exception:
             pass
-
-
-def _clear_video_exports(bridge_node: Any) -> int:
-    output_dir = str(napi.knob_value(bridge_node, "output_directory") or "")
-    if not output_dir or not os.path.isdir(output_dir):
-        return 0
-    removed = 0
-    prefixes = (
-        "nuke_bridge_source_",
-        "nuke_bridge_mask_",
-        "comfy_result",
-        "comfy_video_result",
-    )
-    exts = (".mov", ".mp4", ".png", ".exr")
-    for name in os.listdir(output_dir):
-        if not name.startswith(prefixes):
-            continue
-        if not name.lower().endswith(exts):
-            continue
-        try:
-            os.remove(os.path.join(output_dir, name))
-            removed += 1
-        except OSError:
-            pass
-    return removed
 
 
 def _cache_get(key: tuple) -> Optional[Tuple[bytes, int, int]]:
@@ -260,7 +246,7 @@ def render_frame_png(
         return cached
 
     src_path = tempfile.NamedTemporaryFile(
-        prefix="comfyui_bridge_src_", suffix=".png", delete=False
+        prefix=f"{napi.comp_stem()}_source_", suffix=".png", delete=False
     ).name
 
     try:
@@ -323,7 +309,7 @@ def render_frame_exr(
         return cached
 
     src_path = tempfile.NamedTemporaryFile(
-        prefix="comfyui_bridge_src_", suffix=".exr", delete=False
+        prefix=f"{napi.comp_stem()}_source_", suffix=".exr", delete=False
     ).name
 
     try:

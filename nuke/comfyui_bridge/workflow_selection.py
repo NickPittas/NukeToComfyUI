@@ -1,23 +1,24 @@
-"""Nuke-side dropdown: list open ComfyUI workflows and trigger the selected one.
+"""Nuke-side dropdowns: list open ComfyUI workflows and trigger the selected one.
 
 Reads the bridge node's `comfyui_host`/`comfyui_port` knobs, fetches
-`/nuke_bridge/workflows`, fills the `workflow_choices` Enumeration_Knob, and on
-request asks the backend to run the selected workflow. If the backend can't
-submit itself, it returns the API prompt and this module POSTs `/prompt`.
+`/nuke_bridge/workflows`, fills the `workflow_choices` (image) and
+`video_workflow_choices` (video) Enumeration_Knobs, and on request asks the
+backend to run the selected workflow. If the backend can't submit itself, it
+returns the API prompt and this module POSTs `/prompt`.
 
 The mapping from Enumeration_Knob label back to workflow_id is kept in an
 in-process dict keyed by `bridge_id` (refreshed on every `refresh_workflow_choices`).
+Both selectors share that list; each keeps its own selected index.
 """
 
 from __future__ import annotations
 
-import uuid
 import copy
 import json
-import os
 import threading
 import urllib.error
 import urllib.request
+import uuid
 from typing import Any, Dict, List, Optional
 
 # bridge_id -> last fetched workflow list (metadata only).
@@ -86,7 +87,18 @@ def refresh_workflow_choices(bridge_node: Any) -> int:
     _LAST_LIST[bridge_id] = workflows
 
     labels = _enum_labels(workflows) if workflows else ["(none)"]
-    _set_choices(bridge_node, labels)
+    _set_choices(bridge_node, labels, "workflow_choices")
+    _set_choices(bridge_node, labels, "video_workflow_choices")
+
+    # Keep the existing colorspace menus current, but never let that optional
+    # Nuke-side refresh block the workflow list that this action promises.
+    try:
+        from . import node as node_module
+
+        node_module.refresh_colorspace_choices(bridge_node)
+        node_module.refresh_video_colorspace_choices(bridge_node)
+    except Exception:
+        pass
 
     napi.set_knob_value(
         bridge_node, "status", f"{len(workflows)} workflow(s)" if workflows else "no workflows"
@@ -94,12 +106,12 @@ def refresh_workflow_choices(bridge_node: Any) -> int:
     return len(workflows)
 
 
-def _set_choices(bridge_node: Any, labels: List[str]) -> None:
-    """Update the Enumeration_Knob on the main thread."""
+def _set_choices(bridge_node: Any, labels: List[str], knob_name: str = "workflow_choices") -> None:
+    """Update one Enumeration_Knob on the main thread."""
     from . import napi
 
     def _update() -> None:
-        k = bridge_node.knob("workflow_choices")
+        k = bridge_node.knob(knob_name)
         if k is None:
             return
         # ponytail: Enumeration_Knob.setValues replaces the menu items on every
@@ -110,6 +122,8 @@ def _set_choices(bridge_node: Any, labels: List[str]) -> None:
         except Exception:
             return
         try:
+            if 0 <= k.value() < len(labels):
+                return  # keep the current selection when the list still fits
             k.setValue(0)
         except Exception:
             pass
@@ -120,15 +134,17 @@ def _set_choices(bridge_node: Any, labels: List[str]) -> None:
         pass
 
 
-def _selected_workflow_id(bridge_node: Any) -> Optional[str]:
+def _selected_workflow_id(bridge_node: Any, media_mode: str = "image") -> Optional[str]:
     from . import napi
 
+    mode = _media_mode(media_mode)
+    knob_name = "workflow_choices" if mode == "image" else "video_workflow_choices"
     bridge_id = str(napi.knob_value(bridge_node, "bridge_id") or "")
     workflows = _LAST_LIST.get(bridge_id) or []
     if not workflows:
         return None
     try:
-        idx = int(napi.knob_value(bridge_node, "workflow_choices") or 0)
+        idx = int(napi.knob_value(bridge_node, knob_name) or 0)
     except Exception:
         idx = 0
     if idx < 0 or idx >= len(workflows):
@@ -167,7 +183,7 @@ def _run_selected_workflow_sync(
     from . import napi
 
     mode = _media_mode(media_mode)
-    wid = _selected_workflow_id(bridge_node)
+    wid = _selected_workflow_id(bridge_node, mode)
     if not wid:
         napi.set_knob_value(bridge_node, "status", "no workflow selected")
         return None
@@ -175,14 +191,6 @@ def _run_selected_workflow_sync(
     host = napi.knob_value(bridge_node, "comfyui_host") or "127.0.0.1"
     port = int(napi.knob_value(bridge_node, "comfyui_port") or 8188)
     client_id = uuid.uuid4().hex
-
-    video_bundle = None
-    if mode == "video":
-        try:
-            video_bundle = _render_video_bundle_before_comfy(bridge_node)
-        except Exception as exc:
-            napi.set_knob_value(bridge_node, "status", f"video render failed: {exc}")
-            return None
 
     try:
         data = _request_json(
@@ -205,7 +213,11 @@ def _run_selected_workflow_sync(
     if not prompt:
         napi.set_knob_value(bridge_node, "status", f"run: no prompt for {wid}")
         return None
-    prompt = _patch_nuke_bridge_prompt(prompt, bridge_node, video_bundle)
+    try:
+        prompt = _patch_nuke_bridge_prompt(prompt, bridge_node)
+    except Exception as exc:
+        napi.set_knob_value(bridge_node, "status", f"prompt patch failed: {exc}")
+        return None
 
     from . import comfy_progress
     cid = data.get("client_id") or client_id
@@ -222,31 +234,27 @@ def _run_selected_workflow_sync(
     return {"client_id": cid, "prompt_id": prompt_id, "status": status}
 
 
-def _render_video_bundle_before_comfy(bridge_node: Any) -> Dict[str, Any]:
-    from . import napi, video
-    from .settings import DEFAULT_SETTINGS, load_settings
-
-    first = int(napi.knob_value(bridge_node, "video_first") or napi.root_frame())
-    last = int(napi.knob_value(bridge_node, "video_last") or first)
-    if last < first:
-        raise ValueError(f"invalid video frame range: {first}-{last}")
-    fps = float(napi.knob_value(bridge_node, "video_fps") or 24.0)
-    fmt = str(napi.knob_value(bridge_node, "video_format") or "mov").strip().lower()
-    codec = str(napi.knob_value(bridge_node, "video_mov_codec") or "prores_422hq").strip().lower()
-    colorspace = str(napi.knob_value(bridge_node, "video_colorspace") or "")
-    output_dir = str(napi.knob_value(bridge_node, "output_directory") or load_settings().get("output_directory") or DEFAULT_SETTINGS["output_directory"])
-
-    napi.set_knob_value(bridge_node, "status", f"rendering video {first}-{last}…")
-    bundle = video.export_video_bundle(bridge_node, output_dir, first, last, fps, fmt, codec, colorspace)
-    for key in ("main_path", "mask_path"):
-        path = str(bundle.get(key) or "")
-        if not path or not os.path.isfile(path) or os.path.getsize(path) <= 0:
-            raise RuntimeError(f"missing rendered {key}: {path}")
-    napi.set_knob_value(bridge_node, "status", "video render complete")
-    return bundle
+_WILDCARD_HOSTS = ("0.0.0.0", "::", "[::]")
 
 
-def _patch_nuke_bridge_prompt(prompt: Any, bridge_node: Any, video_bundle: Optional[Dict[str, Any]] = None) -> Any:
+def _advertised_host(bridge_node: Any) -> str:
+    """Address ComfyUI must reach: `bridge_host` knob, falling back to `host`."""
+    from . import napi
+
+    host = str(
+        napi.knob_value(bridge_node, "bridge_host")
+        or napi.knob_value(bridge_node, "host")
+        or "127.0.0.1"
+    ).strip()
+    if host in _WILDCARD_HOSTS:
+        raise ValueError(
+            f"bridge advertises wildcard address {host!r}; set bridge_host to "
+            "the LAN/Tailscale address reachable from ComfyUI"
+        )
+    return host
+
+
+def _patch_nuke_bridge_prompt(prompt: Any, bridge_node: Any) -> Any:
     """Apply Nuke-side bridge settings to NukeBridge nodes before submit."""
     from . import napi
 
@@ -262,7 +270,9 @@ def _patch_nuke_bridge_prompt(prompt: Any, bridge_node: Any, video_bundle: Optio
         video_codec = "prores_422hq"
     video_colorspace = str(napi.knob_value(bridge_node, "video_colorspace") or "")
 
-    video_meta_json = json.dumps({**(video_bundle.get("metadata") or {}), "main_path": video_bundle["main_path"]}) if video_bundle else "{}"
+    bridge_id = str(napi.knob_value(bridge_node, "bridge_id") or "")
+    host = _advertised_host(bridge_node)
+    port = int(napi.knob_value(bridge_node, "port") or 8765)
 
     patched = copy.deepcopy(prompt)
     for node in (patched or {}).values() if isinstance(patched, dict) else []:
@@ -273,6 +283,9 @@ def _patch_nuke_bridge_prompt(prompt: Any, bridge_node: Any, video_bundle: Optio
             continue
         inputs = node.get("inputs")
         if isinstance(inputs, dict):
+            inputs["bridge_id"] = bridge_id
+            inputs["host"] = host
+            inputs["port"] = port
             if class_type in ("FromNuke", "ToNuke"):
                 inputs["format"] = fmt
                 inputs["colorspace"] = colorspace if class_type == "FromNuke" else ""
@@ -280,10 +293,4 @@ def _patch_nuke_bridge_prompt(prompt: Any, bridge_node: Any, video_bundle: Optio
                 inputs["format"] = video_format
                 inputs["mov_codec"] = video_codec
                 inputs["colorspace"] = video_colorspace if class_type == "FromNukeVideo" else ""
-                if class_type == "FromNukeVideo" and video_bundle:
-                    inputs["main_path"] = video_bundle["main_path"]
-                    inputs["mask_path"] = video_bundle["mask_path"]
-                    inputs["metadata_json"] = video_meta_json
-                elif class_type == "ToNukeVideo" and video_bundle:
-                    inputs["video_meta_json"] = video_meta_json
     return patched

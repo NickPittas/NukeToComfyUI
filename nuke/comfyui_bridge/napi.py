@@ -15,7 +15,9 @@ Errors raised inside Nuke callbacks are captured and re-raised on the caller.
 
 from __future__ import annotations
 
+import os
 import threading
+import time
 from typing import Any, Callable
 
 try:  # guarded import: works outside Nuke
@@ -93,6 +95,41 @@ def call(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
     return box.value
 
 
+# --- Comp name sanitization ------------------------------------------------
+
+_UNSAVED_STEMS = ("Root", "Untitled")
+
+
+def sanitize_stem(name: str) -> str:
+    """Map a comp path/name to a filename-safe stem.
+
+    Takes the basename without extension, keeps only [A-Za-z0-9._-]
+    characters, and falls back to `nuke_bridge` for empty, unsaved (Nuke's
+    default root names `Root`/`Untitled`), or all-invalid names. Handles
+    Windows and POSIX path separators.
+    """
+    base = os.path.basename(str(name or "").replace("\\", "/"))
+    stem = os.path.splitext(base)[0]
+    safe = "".join(ch for ch in stem if ch.isalnum() or ch in "._-")
+    if not safe or safe in _UNSAVED_STEMS:
+        return "nuke_bridge"
+    return safe
+
+
+def comp_stem() -> str:
+    """Filename-safe stem for the current comp, read via Nuke's root name.
+
+    Falls back to `nuke_bridge` outside Nuke or for unsaved comps.
+    """
+    if not _HAS_NUKE:
+        return "nuke_bridge"
+    try:
+        name = call(lambda: str(_nuke.root().name() or ""))
+    except Exception:
+        return "nuke_bridge"
+    return sanitize_stem(name)
+
+
 # --- Convenience wrappers used by other modules ----------------------------
 
 def all_nodes() -> Any:
@@ -140,7 +177,67 @@ def set_knob_value(node: Any, name: str, value: Any) -> None:
             k.setValue(value)
         else:
             k.setValue(value)
+        if name == "status" and isinstance(value, str):
+            # Mirror status updates into the multiline log in the same
+            # main-thread closure (append_log would add a redundant call hop).
+            _append_log_sync(node, value)
     call(_set)
+
+
+_LOG_MAX_LINES = 300
+
+
+def _log_entry_text(line: str) -> str:
+    """Return the level+message part of a log line, stripping the timestamp
+    prefix so consecutive-duplicate detection ignores timestamps."""
+    if line.startswith("[") and "] " in line:
+        head, _, rest = line.partition("] ")
+        if (
+            len(head) == 9
+            and head[1:3].isdigit()
+            and head[4:6].isdigit()
+            and head[7:9].isdigit()
+        ):
+            return rest
+    return line
+
+
+def _append_log_sync(node: Any, message: str, level: str = "INFO") -> None:
+    """Append one `[HH:MM:SS] LEVEL message` line to the node's `log` knob.
+
+    Main-thread only: skips consecutive duplicates of the same level+message
+    (timestamp excluded) and keeps the last {_LOG_MAX_LINES} lines.
+    """
+    k = node.knob("log")
+    if k is None:
+        return
+    entry = f"{level} {message}"
+    current = str(k.value() or "")
+    lines = current.splitlines()
+    if lines and _log_entry_text(lines[-1]) == entry:
+        return
+    lines.append(f"[{time.strftime('%H:%M:%S')}] {entry}")
+    if len(lines) > _LOG_MAX_LINES:
+        del lines[: len(lines) - _LOG_MAX_LINES]
+    k.setValue("\n".join(lines))
+
+
+def append_log(node: Any, message: str, level: str = "INFO") -> None:
+    """Append a timestamped line to the node's multiline `log` knob.
+
+    Main-thread safe; capped to the last {_LOG_MAX_LINES} lines.
+    """
+    call(_append_log_sync, node, message, level)
+
+
+def clear_log(node: Any) -> None:
+    """Clear the node's multiline `log` knob. Main-thread safe."""
+    def _clear() -> None:
+        k = node.knob("log")
+        if k is None:
+            return
+        k.setValue("")
+    call(_clear)
 
 
 def root_frame() -> int:

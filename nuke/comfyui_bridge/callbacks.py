@@ -18,10 +18,13 @@ from __future__ import annotations
 from typing import Any
 
 from . import napi
-from .node import NODE_CLASS_NAME, ensure_knobs, initialize_defaults
+from .node import NODE_CLASS_NAME, ensure_knobs, initialize_defaults, sync_prompts
 
 
 _REGISTERED = False
+
+
+_PROMPT_KNOBS = ("prompt", "video_prompt")
 
 
 def _node_is_ours(node: Any) -> bool:
@@ -77,6 +80,31 @@ def initialize_this_node() -> None:
     _on_create(None)
 
 
+def _on_knob_changed() -> None:
+    """Keep `prompt`/`video_prompt` in sync on any edit to either knob."""
+    if not napi.has_nuke():
+        return
+    nuke: Any = napi._nuke
+    try:
+        node = nuke.thisNode()
+        knob = nuke.thisKnob()
+    except Exception:
+        return
+    if not _node_is_ours(node) or knob is None:
+        return
+    try:
+        name = knob.name()
+    except Exception:
+        return
+    if name not in _PROMPT_KNOBS:
+        return
+    try:
+        sync_prompts(node, name)
+    except Exception:
+        # A callback must never break the edit the user is performing.
+        pass
+
+
 def register() -> None:
     """Register the onCreate callback once. Idempotent; no-op outside Nuke."""
     global _REGISTERED
@@ -94,4 +122,13 @@ def register() -> None:
             return
     except Exception:
         return
+    try:
+        nuke.addKnobChanged(_on_knob_changed, nodeClass=NODE_CLASS_NAME)
+    except TypeError:
+        try:
+            nuke.addKnobChanged(_on_knob_changed)
+        except Exception:
+            pass
+    except Exception:
+        pass
     _REGISTERED = True

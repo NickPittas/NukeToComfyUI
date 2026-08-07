@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import os
+import shutil
 import time
 import uuid
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
-from . import napi
+from . import napi, session_files
 
 
 VIDEO_FORMATS = ("mov", "mp4")
@@ -282,9 +283,14 @@ def export_video_bundle(bridge_node: Any, output_directory: str, frame_start: in
     cached = _VIDEO_CACHE.get(key)
     if cached and _valid_bundle(cached):
         return cached
+    comp = napi.comp_stem()
     suffix = ".mov" if fmt == "mov" else ".mp4"
-    main_path = _unique_path(output_directory, "nuke_bridge_source", suffix.lstrip("."))
-    mask_path = _unique_path(output_directory, "nuke_bridge_mask", "mp4")
+    main_path = _unique_path(output_directory, f"{comp}_source", suffix.lstrip("."))
+    mask_path = _unique_path(output_directory, f"{comp}_mask", "mp4")
+    # Register before writing so a partial/failed bundle is still cleaned up;
+    # missing tracked files are harmless.
+    session_files.track(main_path)
+    session_files.track(mask_path)
     nuke: Any = napi._nuke
 
     def _export() -> Dict[str, Any]:
@@ -328,11 +334,16 @@ def _unique_path(output_directory: str, prefix: str, ext: str) -> str:
     return os.path.join(output_directory, f"{prefix}_{stamp}_{os.getpid()}_{uuid.uuid4().hex[:8]}.{ext}")
 
 
-def save_video_result(body: bytes, output_directory: str, filename_prefix: str, fmt: str, frame_start: int, frame_end: int, colorspace: str, bridge_node: Any, create_read: bool) -> str:
-    ext = "mov" if fmt == "mov" else "mp4"
-    path = _unique_path(output_directory, filename_prefix or "comfy_video_result", ext)
-    with open(path, "wb") as fh:
-        fh.write(body)
+def _finalize_result(
+    path: str,
+    fmt: str,
+    frame_start: int,
+    frame_end: int,
+    colorspace: str,
+    bridge_node: Any,
+    create_read: bool,
+) -> str:
+    """Shared result finishing: optional Read node + last_result knob."""
     if create_read and bridge_node is not None and napi.has_nuke():
         nuke: Any = napi._nuke
 
@@ -359,3 +370,22 @@ def save_video_result(body: bytes, output_directory: str, filename_prefix: str, 
     if bridge_node is not None:
         napi.set_knob_value(bridge_node, "last_result", path)
     return path
+
+
+def save_video_result_file(
+    src_path: str,
+    output_directory: str,
+    filename_prefix: Optional[str] = None,
+    fmt: str = "mov",
+    frame_start: int = 1,
+    frame_end: int = 1,
+    colorspace: str = "",
+    bridge_node: Any = None,
+    create_read: bool = False,
+) -> str:
+    """Move an already-written video file into the output directory and finish it."""
+    ext = "mov" if fmt == "mov" else "mp4"
+    prefix = filename_prefix or f"{napi.comp_stem()}_result"
+    path = _unique_path(output_directory, prefix, ext)
+    shutil.move(src_path, path)
+    return _finalize_result(path, fmt, frame_start, frame_end, colorspace, bridge_node, create_read)

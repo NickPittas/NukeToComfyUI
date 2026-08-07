@@ -119,6 +119,7 @@ def _default_output_dir() -> str:
 DEFAULT_SETTINGS: Dict[str, Any] = {
     "schema_version": _SCHEMA_VERSION,
     "host": "127.0.0.1",
+    "bridge_host": "",
     "port": 8765,
     "output_directory": _default_output_dir(),
     "comfyui_root": "",

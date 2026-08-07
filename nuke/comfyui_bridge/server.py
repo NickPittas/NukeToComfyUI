@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 import threading
 import time
 import urllib.parse
@@ -28,6 +29,12 @@ _VIDEO_ASSETS: Dict[str, Dict[str, Any]] = {}
 _VIDEO_ASSET_TTL = 3600.0
 
 
+class _ReusableHTTPServer(ThreadingHTTPServer):
+    """Same-port restarts must rebind immediately (no TIME_WAIT refusal)."""
+
+    allow_reuse_address = True
+
+
 class BridgeServer:
     """Holds server state: bound address, settings."""
 
@@ -41,7 +48,7 @@ class BridgeServer:
     def start(self) -> None:
         if self._http is not None:
             return
-        http = ThreadingHTTPServer((self.host, self.port), _BridgeHandler)
+        http = _ReusableHTTPServer((self.host, self.port), _BridgeHandler)
         http.daemon_threads = True
         self._http = http
         self._thread = threading.Thread(
@@ -67,16 +74,36 @@ def get_server() -> Optional[BridgeServer]:
 
 
 def start_server() -> BridgeServer:
-    """Start (or restart) the global bridge server from saved settings."""
+    """Start (or restart) the global bridge server from saved settings.
+
+    Transactional restart: the old listener is stopped first (the same
+    host/port would otherwise refuse to rebind), then the new one is started
+    from saved settings. `_SERVER` is published only after a successful start.
+    If the new bind/start fails, the old server is restarted and `_SERVER` is
+    left pointing at the running old server (or None if the restore also
+    fails); the original error is re-raised.
+    """
     global _SERVER
     with _SERVER_LOCK:
         settings = load_settings()
         host = str(settings.get("host") or DEFAULT_SETTINGS["host"])
         port = int(settings.get("port") or DEFAULT_SETTINGS["port"])
-        if _SERVER is not None:
-            _SERVER.stop()
-        srv = BridgeServer(host, port, settings)
-        srv.start()
+        old = _SERVER
+        if old is not None:
+            old.stop()
+        try:
+            srv = BridgeServer(host, port, settings)
+            srv.start()
+        except Exception:
+            if old is not None:
+                try:
+                    old.start()
+                    _SERVER = old
+                except Exception:
+                    _SERVER = None
+            else:
+                _SERVER = None
+            raise
         _SERVER = srv
         return srv
 
@@ -294,7 +321,8 @@ class _BridgeHandler(BaseHTTPRequestHandler):
 
     def _handle_result(self, bridge_id: str) -> None:
         body = self._read_body()
-        prefix = self.headers.get("X-NukeBridge-Filename-Prefix") or "comfy_result"
+        # Nuke result names derive from the current comp (see result.save_result);
+        # the client header is not used when naming a Nuke result.
         colorspace = self._clean_colorspace(self.headers.get("X-NukeBridge-Colorspace"))
         fmt = (self.headers.get("X-NukeBridge-Format") or "png8").strip().lower()
         ext = "exr" if fmt == "exr16" else "png"
@@ -318,12 +346,15 @@ class _BridgeHandler(BaseHTTPRequestHandler):
                 path = result.save_result(
                     body=body,
                     output_directory=str(output_dir),
-                    filename_prefix=prefix,
                     colorspace=colorspace,
                     bridge_node=node,
                     create_read=create_read,
                     ext=ext,
                 )
+                if node is not None:
+                    napi.set_knob_value(
+                        node, "status", f"result saved: {os.path.basename(path)}"
+                    )
             except Exception as exc:
                 _json_response(self, 500, {"ok": False, "error": repr(exc)})
                 return
@@ -355,6 +386,7 @@ class _BridgeHandler(BaseHTTPRequestHandler):
                 srv = get_server()
                 output_dir = str(napi.knob_value(node, "output_directory") or (srv.settings if srv else load_settings()).get("output_directory") or DEFAULT_SETTINGS["output_directory"])
                 bundle = video.export_video_bundle(node, output_dir, first, last, fps, fmt, mov_codec, colorspace)
+                prompt = str(napi.knob_value(node, "prompt") or "")
             except Exception as exc:
                 _json_response(self, 500, {"ok": False, "error": repr(exc)})
                 return
@@ -365,6 +397,7 @@ class _BridgeHandler(BaseHTTPRequestHandler):
         srv = get_server()
         base = srv.url() if srv else ""
         meta = dict(bundle["metadata"])
+        meta["prompt"] = prompt
         _json_response(self, 200, {
             "ok": True,
             "asset_id": asset_id,
@@ -380,41 +413,93 @@ class _BridgeHandler(BaseHTTPRequestHandler):
             return
         path = str(asset.get("main_path" if kind == "main" else "mask_path") or "")
         try:
-            with open(path, "rb") as fh:
-                body = fh.read()
+            size = os.path.getsize(path)
         except OSError as exc:
             _json_response(self, 404, {"ok": False, "error": repr(exc)})
             return
         meta = asset.get("metadata") or {}
         fmt = meta.get("format") if kind == "main" else "mov"
-        _binary_response(self, 200, body, {
-            "Content-Type": "video/quicktime" if fmt == "mov" else "video/mp4",
-            "X-NukeBridge-Format": str(fmt),
-            "X-NukeBridge-Frame-Start": str(meta.get("frame_start") or ""),
-            "X-NukeBridge-Frame-End": str(meta.get("frame_end") or ""),
-            "X-NukeBridge-FPS": str(meta.get("fps") or ""),
-        })
+        self.send_response(200)
+        self.send_header("Content-Type", "video/quicktime" if fmt == "mov" else "video/mp4")
+        self.send_header("Content-Length", str(size))
+        self.send_header("X-NukeBridge-Format", str(fmt))
+        self.send_header("X-NukeBridge-Frame-Start", str(meta.get("frame_start") or ""))
+        self.send_header("X-NukeBridge-Frame-End", str(meta.get("frame_end") or ""))
+        self.send_header("X-NukeBridge-FPS", str(meta.get("fps") or ""))
+        self.end_headers()
+        try:
+            with open(path, "rb") as fh:
+                while True:
+                    chunk = fh.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+        except OSError as exc:
+            # Headers already sent; can only close the connection.
+            self.close_connection = True
 
     def _handle_video_result(self, bridge_id: str) -> None:
-        body = self._read_body()
-        prefix = self.headers.get("X-NukeBridge-Filename-Prefix") or "comfy_video_result"
+        length = int(self.headers.get("Content-Length") or 0)
+        if length <= 0:
+            _json_response(self, 400, {"ok": False, "error": "video upload missing or non-positive Content-Length"})
+            return
+        # Nuke result names derive from the current comp (see
+        # video.save_video_result_file); the client header is not used for naming.
         fmt = (self.headers.get("X-NukeBridge-Format") or "mov").strip().lower()
         first = int(float(self.headers.get("X-NukeBridge-Frame-Start") or 1))
         last = int(float(self.headers.get("X-NukeBridge-Frame-End") or first))
         colorspace = self._clean_colorspace(self.headers.get("X-NukeBridge-Colorspace"))
         srv = get_server()
         output_dir = (srv.settings if srv else load_settings()).get("output_directory") or DEFAULT_SETTINGS["output_directory"]
-        with _NUKE_LOCK:
-            node = None
-            create_read = False
-            try:
-                node, _ = self._resolve_bridge_node(bridge_id)
-                if node is not None:
-                    create_read = bool(napi.knob_value(node, "create_read_on_result"))
-                path = video.save_video_result(body, str(output_dir), prefix, fmt, first, last, colorspace, node, create_read)
-            except Exception as exc:
-                _json_response(self, 500, {"ok": False, "error": repr(exc)})
-                return
+
+        tmp_path: Optional[str] = None
+        try:
+            fd, tmp_path = tempfile.mkstemp(prefix="nuke_bridge_video_upload_", suffix=".part")
+            received = 0
+            with os.fdopen(fd, "wb") as fh:
+                while received < length:
+                    chunk = self.rfile.read(min(1024 * 1024, length - received))
+                    if not chunk:
+                        break
+                    fh.write(chunk)
+                    received += len(chunk)
+            if received != length:
+                raise RuntimeError(
+                    f"video upload incomplete: expected {length} bytes, got {received}"
+                )
+
+            with _NUKE_LOCK:
+                node = None
+                create_read = False
+                try:
+                    node, _ = self._resolve_bridge_node(bridge_id)
+                    if node is not None:
+                        create_read = bool(napi.knob_value(node, "create_read_on_result"))
+                except Exception:
+                    pass
+
+                try:
+                    path = video.save_video_result_file(
+                        tmp_path, str(output_dir), None, fmt, first, last, colorspace, node, create_read
+                    )
+                    if node is not None:
+                        napi.set_knob_value(
+                            node, "status", f"video saved: {os.path.basename(path)}"
+                        )
+                except Exception as exc:
+                    _json_response(self, 500, {"ok": False, "error": repr(exc)})
+                    return
+                tmp_path = None  # moved into place
+        except Exception as exc:
+            _json_response(self, 500, {"ok": False, "error": repr(exc)})
+            return
+        finally:
+            if tmp_path is not None:
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+
         _json_response(self, 200, {"ok": True, "path": path})
 
 

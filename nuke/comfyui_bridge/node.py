@@ -44,6 +44,11 @@ _RUN_VIDEO_COMMAND = (
     "from comfyui_bridge import workflow_selection; "
     "workflow_selection.run_selected_workflow(nuke.thisNode(), media_mode='video')"
 )
+_REFRESH_WORKFLOWS_LABEL = "Refresh workflows"
+_REFRESH_WORKFLOWS_COMMAND = (
+    "from comfyui_bridge import workflow_selection; "
+    "workflow_selection.refresh_workflow_choices(nuke.thisNode())"
+)
 
 
 def _new_bridge_id() -> str:
@@ -83,13 +88,7 @@ def _knob_specs() -> List[Tuple[str, Callable[[Any], Any]]]:
         return nuke.String_Knob(name, label)
 
     return [
-        ("ComfyUI", lambda n: n.Tab_Knob("ComfyUI")),
-        ("bridge_id", lambda n: n.String_Knob("bridge_id", "bridge id")),
-        ("host", lambda n: n.String_Knob("host", "host")),
-        ("port", lambda n: n.Int_Knob("port", "port")),
-        ("comfyui_host", lambda n: n.String_Knob("comfyui_host", "ComfyUI host")),
-        ("comfyui_port", lambda n: n.Int_Knob("comfyui_port", "ComfyUI port")),
-        ("output_directory", lambda n: _file_or_string(n, "output_directory", "output directory")),
+        ("Image", lambda n: n.Tab_Knob("Image")),
         ("prompt", lambda n: _multiline_or_string(n, "prompt", "prompt")),
         ("mask_source", lambda n: n.Enumeration_Knob("mask_source", "mask_source", list(MASK_SOURCES))),
         ("send_format", lambda n: n.Enumeration_Knob("send_format", "send_format", list(SEND_FORMATS))),
@@ -97,15 +96,53 @@ def _knob_specs() -> List[Tuple[str, Callable[[Any], Any]]]:
         (
             "refresh_colorspaces",
             lambda n: _pyscript(
-                n, "refresh_colorspaces", "Refresh colorspaces",
-                "from comfyui_bridge import node; "
-                "node.refresh_colorspace_choices(nuke.thisNode())",
+                n, "refresh_colorspaces", _REFRESH_WORKFLOWS_LABEL, _REFRESH_WORKFLOWS_COMMAND,
             ),
         ),
         ("workflow_choices", lambda n: n.Enumeration_Knob("workflow_choices", "workflow", ["(none)"])),
-        ("create_read_on_result", lambda n: n.Boolean_Knob("create_read_on_result", "create_read_on_result")),
-        ("status", lambda n: n.String_Knob("status", "status")),
-        ("last_result", lambda n: n.String_Knob("last_result", "last_result")),
+        (
+            "run_selected_workflow",
+            lambda n: _pyscript(
+                n, "run_selected_workflow", _RUN_IMAGE_LABEL, _RUN_IMAGE_COMMAND,
+            ),
+        ),
+        ("Video", lambda n: n.Tab_Knob("Video")),
+        ("video_prompt", lambda n: _multiline_or_string(n, "video_prompt", "prompt")),
+        ("video_format", lambda n: n.Enumeration_Knob("video_format", "video_format", list(VIDEO_FORMATS))),
+        ("video_mov_codec", lambda n: n.Enumeration_Knob("video_mov_codec", "mov codec", list(VIDEO_MOV_CODECS))),
+        ("video_first", lambda n: n.Int_Knob("video_first", "first")),
+        ("video_last", lambda n: n.Int_Knob("video_last", "last")),
+        ("video_fps", lambda n: n.Double_Knob("video_fps", "fps")),
+        ("video_colorspace", lambda n: n.Enumeration_Knob("video_colorspace", "video colorspace", [])),
+        (
+            "refresh_video_colorspaces",
+            lambda n: _pyscript(
+                n, "refresh_video_colorspaces", _REFRESH_WORKFLOWS_LABEL, _REFRESH_WORKFLOWS_COMMAND,
+            ),
+        ),
+        ("video_workflow_choices", lambda n: n.Enumeration_Knob("video_workflow_choices", "workflow", ["(none)"])),
+        (
+            "run_selected_workflow_video",
+            lambda n: _pyscript(
+                n, "run_selected_workflow_video", _RUN_VIDEO_LABEL, _RUN_VIDEO_COMMAND,
+            ),
+        ),
+        ("ComfyUI", lambda n: n.Tab_Knob("ComfyUI")),
+        ("bridge_id", lambda n: n.String_Knob("bridge_id", "Bridge ID")),
+        ("host", lambda n: n.String_Knob("host", "Listen on")),
+        ("bridge_host", lambda n: n.String_Knob("bridge_host", "Nuke host")),
+        ("port", lambda n: n.Int_Knob("port", "Nuke port")),
+        ("comfyui_host", lambda n: n.String_Knob("comfyui_host", "ComfyUI host")),
+        ("comfyui_port", lambda n: n.Int_Knob("comfyui_port", "ComfyUI port")),
+        ("output_directory", lambda n: _file_or_string(n, "output_directory", "Output folder")),
+        ("create_read_on_result", lambda n: n.Boolean_Knob("create_read_on_result", "Create Read node")),
+        (
+            "refresh_workflows",
+            lambda n: _pyscript(
+                n, "refresh_workflows", _REFRESH_WORKFLOWS_LABEL,
+                _REFRESH_WORKFLOWS_COMMAND,
+            ),
+        ),
         (
             "save_defaults",
             lambda n: _pyscript(
@@ -122,39 +159,15 @@ def _knob_specs() -> List[Tuple[str, Callable[[Any], Any]]]:
                 "render.clear_cache_from_node(nuke.thisNode())",
             ),
         ),
+        ("Logs", lambda n: n.Tab_Knob("Logs")),
+        ("status", lambda n: n.String_Knob("status", "status")),
+        ("last_result", lambda n: n.String_Knob("last_result", "last_result")),
+        ("log", lambda n: _multiline_or_string(n, "log", "log")),
         (
-            "refresh_workflows",
+            "clear_log",
             lambda n: _pyscript(
-                n, "refresh_workflows", "Refresh workflows",
-                "from comfyui_bridge import workflow_selection; "
-                "workflow_selection.refresh_workflow_choices(nuke.thisNode())",
-            ),
-        ),
-        (
-            "run_selected_workflow",
-            lambda n: _pyscript(
-                n, "run_selected_workflow", _RUN_IMAGE_LABEL, _RUN_IMAGE_COMMAND,
-            ),
-        ),
-        ("Video", lambda n: n.Tab_Knob("Video")),
-        ("video_format", lambda n: n.Enumeration_Knob("video_format", "video_format", list(VIDEO_FORMATS))),
-        ("video_mov_codec", lambda n: n.Enumeration_Knob("video_mov_codec", "mov codec", list(VIDEO_MOV_CODECS))),
-        ("video_first", lambda n: n.Int_Knob("video_first", "first")),
-        ("video_last", lambda n: n.Int_Knob("video_last", "last")),
-        ("video_fps", lambda n: n.Double_Knob("video_fps", "fps")),
-        ("video_colorspace", lambda n: n.Enumeration_Knob("video_colorspace", "video colorspace", [])),
-        (
-            "refresh_video_colorspaces",
-            lambda n: _pyscript(
-                n, "refresh_video_colorspaces", "Refresh video colorspaces",
-                "from comfyui_bridge import node; "
-                "node.refresh_video_colorspace_choices(nuke.thisNode())",
-            ),
-        ),
-        (
-            "run_selected_workflow_video",
-            lambda n: _pyscript(
-                n, "run_selected_workflow_video", _RUN_VIDEO_LABEL, _RUN_VIDEO_COMMAND,
+                n, "clear_log", "Clear log",
+                "from comfyui_bridge import napi; napi.clear_log(nuke.thisNode())",
             ),
         ),
     ]
@@ -162,27 +175,79 @@ def _knob_specs() -> List[Tuple[str, Callable[[Any], Any]]]:
 
 def _apply_layout(node: Any, nuke: Any) -> None:
     """Set width/row flags on layout knobs. Applies to new and saved nodes."""
-    try:
-        wf = node.knob("workflow_choices")
-        if wf is not None and hasattr(wf, "setWidth"):
-            wf.setWidth(400)
-    except Exception:
-        pass
     startline = getattr(nuke, "STARTLINE", None)
-    for name, label, command in (
-        ("run_selected_workflow", _RUN_IMAGE_LABEL, _RUN_IMAGE_COMMAND),
-        ("run_selected_workflow_video", _RUN_VIDEO_LABEL, _RUN_VIDEO_COMMAND),
-    ):
+
+    def _flag(name: str, label: str | None = None, command: str | None = None,
+              tooltip: str | None = None) -> None:
         try:
             k = node.knob(name)
-            if k is not None:
-                if startline is not None:
-                    k.setFlag(startline)
+            if k is None:
+                return
+            if startline is not None:
+                k.setFlag(startline)
+            if command is not None:
                 k.setValue(command)
-                if hasattr(k, "setLabel"):
-                    k.setLabel(label)
+            if label is not None and hasattr(k, "setLabel"):
+                k.setLabel(label)
+            if tooltip is not None and hasattr(k, "setTooltip"):
+                k.setTooltip(tooltip)
         except Exception:
             pass
+
+    # Wide text/multiline/selector knobs (no width on int/bool/button knobs).
+    for knob_name in (
+        "prompt", "video_prompt", "workflow_choices", "video_workflow_choices",
+        "log", "bridge_id", "host", "bridge_host", "comfyui_host",
+        "output_directory", "status", "last_result",
+    ):
+        try:
+            wf = node.knob(knob_name)
+            if wf is not None and hasattr(wf, "setWidth"):
+                wf.setWidth(400)
+        except Exception:
+            pass
+
+    # Buttons: own row; refresh/run buttons also get repaired label/command so
+    # already-saved nodes adopt the current behavior.
+    for name, label, command in (
+        ("refresh_colorspaces", _REFRESH_WORKFLOWS_LABEL, _REFRESH_WORKFLOWS_COMMAND),
+        ("run_selected_workflow", _RUN_IMAGE_LABEL, _RUN_IMAGE_COMMAND),
+        ("refresh_video_colorspaces", _REFRESH_WORKFLOWS_LABEL, _REFRESH_WORKFLOWS_COMMAND),
+        ("run_selected_workflow_video", _RUN_VIDEO_LABEL, _RUN_VIDEO_COMMAND),
+    ):
+        _flag(name, label, command)
+
+    # ComfyUI action buttons and settings knobs: each gets its own row.
+    for name in (
+        "refresh_workflows", "save_defaults", "clear_frame_cache",
+        "bridge_id", "host", "bridge_host", "port", "comfyui_host",
+        "comfyui_port", "output_directory", "create_read_on_result",
+    ):
+        _flag(name)
+
+    # Network knobs: repair labels/tooltips so already-saved nodes adopt the
+    # current wording and help text. Tooltip text is user-facing, keep in sync
+    # with node_settings.save_defaults_from_node behavior.
+    for name, label, tooltip in (
+        ("host", "Listen on",
+         "Where the Nuke bridge accepts connections. Same computer: 127.0.0.1. "
+         "LAN/Tailscale: 0.0.0.0."),
+        ("bridge_host", "Nuke host",
+         "Address ComfyUI uses to reach this Nuke computer. Enter this "
+         "machine's LAN or Tailscale IP; never 0.0.0.0."),
+        ("port", "Nuke port",
+         "Port ComfyUI uses to reach the Nuke bridge. Default: 8765."),
+        ("comfyui_host", "ComfyUI host",
+         "Address Nuke uses to reach the ComfyUI computer. Enter its LAN or "
+         "Tailscale IP."),
+        ("comfyui_port", "ComfyUI port",
+         "ComfyUI API port. Default: 8188."),
+    ):
+        _flag(name, label, tooltip=tooltip)
+    _flag(
+        "save_defaults",
+        tooltip="Save these values and restart the Nuke bridge listener immediately.",
+    )
 
 
 def _append_all_knobs(group_node: Any, nuke: Any) -> None:
@@ -327,6 +392,42 @@ def refresh_colorspace_choices_for_knob(node: Any, knob_name: str) -> None:
         pass
 
 
+def sync_prompts(node: Any, changed_name: str) -> None:
+    """Copy an edit on one prompt knob to the other (keeps them synchronized).
+
+    Recursion-safe: writes only when the values differ, so the knobChanged
+    fired by the copy sees equal values and returns immediately.
+    """
+    p = node.knob("prompt")
+    vp = node.knob("video_prompt")
+    if p is None or vp is None:
+        return
+    pv = p.value()
+    vpv = vp.value()
+    if pv == vpv:
+        return
+    if changed_name == "video_prompt":
+        p.setValue(vpv)
+    else:
+        vp.setValue(pv)
+
+
+def converge_prompts(node: Any) -> None:
+    """Align saved prompt/video_prompt after load. `prompt` wins unless empty."""
+    p = node.knob("prompt")
+    vp = node.knob("video_prompt")
+    if p is None or vp is None:
+        return
+    pv = p.value()
+    vpv = vp.value()
+    if pv == vpv:
+        return
+    if pv:
+        vp.setValue(pv)
+    else:
+        p.setValue(vpv)
+
+
 def initialize_defaults(node: Any) -> None:
     """Fill empty dynamic defaults: bridge_id, host/port, output_directory,
     comfyui host/port, create_read_on_result, status.
@@ -370,6 +471,7 @@ def initialize_defaults(node: Any) -> None:
 
     _str("bridge_id", _new_bridge_id())
     _str("host", str(settings.get("host") or "127.0.0.1"))
+    _str("bridge_host", str(settings.get("bridge_host") or settings.get("host") or "127.0.0.1"))
     _int("port", int(settings.get("port") or 8765))
     _str("comfyui_host", str(settings.get("comfyui_host") or "127.0.0.1"))
     _int("comfyui_port", int(settings.get("comfyui_port") or 8188))
@@ -383,6 +485,7 @@ def initialize_defaults(node: Any) -> None:
         _int("video_fps", int(root.fps()))
     except Exception:
         pass
+    converge_prompts(node)
 
 
 # --------------------------------------------------------------------------
@@ -442,18 +545,24 @@ def _create_group_fallback(nuke: Any) -> Any:
         ("mask_source", MASK_SOURCES[0]),
         ("send_format", SEND_FORMATS[0]),
         ("workflow_choices", "(none)"),
+        ("video_workflow_choices", "(none)"),
     ):
         try:
             node.knob(name).setValue(0)
         except Exception:
             pass
     _safe_set(node, "prompt", "")
+    _safe_set(node, "video_prompt", "")
     _safe_set(node, "last_result", "")
     return node
 
 
 def _safe_set(node: Any, name: str, value: Any) -> None:
     try:
+        if name == "status" and napi.has_nuke():
+            # Mirror status into the log via the main-thread setter.
+            napi.set_knob_value(node, name, value)
+            return
         k = node.knob(name)
         if k is not None:
             k.setValue(value)

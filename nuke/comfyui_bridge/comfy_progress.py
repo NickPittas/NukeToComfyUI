@@ -55,6 +55,43 @@ def extract_prompt_id(response: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+def node_labels(prompt_payload: Any) -> Dict[str, str]:
+    """Map API-prompt node IDs to human titles for progress messages.
+
+    Preference: `_meta.title`, then `class_type`, then the raw ID. Pure and
+    dependency-free so it can be exercised outside Nuke.
+    """
+    labels: Dict[str, str] = {}
+    if not isinstance(prompt_payload, dict):
+        return labels
+    for nid, spec in prompt_payload.items():
+        if not isinstance(spec, dict):
+            continue
+        meta = spec.get("_meta")
+        title = meta.get("title") if isinstance(meta, dict) else None
+        class_type = spec.get("class_type")
+        labels[str(nid)] = str(title or class_type or nid)
+    return labels
+
+
+def event_node_label(labels: Dict[str, str], node: Any, display_node: Any = None) -> str:
+    """Resolve an execution event's node id to a human label.
+
+    Preference: mapped `node`, then mapped `display_node` (recent Comfy
+    events may carry it), then raw `display_node`, then the raw id. Pure;
+    never queries object_info.
+    """
+    key = str(node) if node is not None else None
+    if key is not None and key in labels:
+        return labels[key]
+    dkey = str(display_node) if display_node is not None else None
+    if dkey is not None and dkey in labels:
+        return labels[dkey]
+    if dkey is not None:
+        return dkey
+    return key or ""
+
+
 def fetch_history(host: str, port: int, prompt_id: str, timeout: float = 5.0) -> Dict[str, Any]:
     """GET /history/{prompt_id}; returns {} if not present or on error."""
     url = f"{_base_url(host, port)}/history/{urllib.parse.quote(prompt_id)}"
@@ -270,6 +307,7 @@ def monitor_execution(
     client_id: str,
     total_timeout: float = 600.0,
     use_tls: bool = False,
+    labels: Optional[Dict[str, str]] = None,
 ) -> str:
     """Monitor a ComfyUI prompt_id until it finishes or is cancelled.
 
@@ -278,6 +316,7 @@ def monitor_execution(
     'unknown'. Best-effort: never raises.
     """
     deadline = time.time() + max(5.0, float(total_timeout))
+    labels = labels or {}
     task = _make_progress(f"ComfyUI workflow {prompt_id[:8]}")
     _set_status(bridge_node, f"submitted: {prompt_id[:8]}")
     _progress_set(task, 0, "connecting to ComfyUI…")
@@ -329,7 +368,8 @@ def monitor_execution(
                     continue
 
                 outcome = _handle_event(
-                    msg, prompt_id, bridge_node, task, locals_state={"saw_start": saw_start}
+                    msg, prompt_id, bridge_node, task, locals_state={"saw_start": saw_start},
+                    labels=labels,
                 )
                 # _handle_event may mutate bookkeeping via return flags:
                 if outcome == "_START":
@@ -346,16 +386,19 @@ def monitor_execution(
                     mx = data.get("max")
                     if isinstance(value, (int, float)) and isinstance(mx, (int, float)) and mx:
                         pct = int(100.0 * float(value) / float(mx))
-                        _progress_set(task, pct, f"progress {value}/{mx}")
-                        _set_status(bridge_node, f"running: {value}/{mx}")
+                        label = event_node_label(labels, data.get("node"), data.get("display_node"))
+                        _progress_set(task, pct, f"progress {value}/{mx} ({label})" if label else f"progress {value}/{mx}")
+                        _set_status(bridge_node, f"{label}: {value}/{mx}" if label else f"running: {value}/{mx}")
                 elif mtype == "executing" and isinstance(data.get("node"), str):
                     last_node = data.get("node")
-                    _progress_set(task, None, f"executing {last_node}")
-                    _set_status(bridge_node, f"executing: {last_node}")
+                    label = event_node_label(labels, last_node, data.get("display_node"))
+                    _progress_set(task, None, f"executing {label}")
+                    _set_status(bridge_node, f"executing: {label}")
                 elif mtype == "executed":
                     node = data.get("node")
-                    _progress_set(task, None, f"executed {node}")
-                    _set_status(bridge_node, f"executed: {node}")
+                    label = event_node_label(labels, node, data.get("display_node"))
+                    _progress_set(task, None, f"executed {label}")
+                    _set_status(bridge_node, f"executed: {label}")
                 # Loop continues until a terminal event returns from _handle_event
                 # or the deadline/cancel checks above fire.
             # ponytail: defensive — the loop is only exited by return/break, but
@@ -376,6 +419,7 @@ def _handle_event(
     bridge_node: Any,
     task: Any,
     locals_state: Dict[str, Any],
+    labels: Optional[Dict[str, str]] = None,
 ) -> Optional[str]:
     """Return a terminal status string, '_START' for execution_start, or None."""
     mtype = msg.get("type")
@@ -392,9 +436,12 @@ def _handle_event(
         return "_START"
 
     if mtype == "execution_error" and _ours():
+        labels = labels or {}
+        label = event_node_label(labels, data.get("node_id") or data.get("node"))
         node_type = data.get("exception_type") or data.get("node_type") or "?"
-        _set_status(bridge_node, f"error: {node_type}")
-        _progress_set(task, 100, f"error: {node_type}")
+        detail = f"{label}: {node_type}" if label else node_type
+        _set_status(bridge_node, f"error: {detail}")
+        _progress_set(task, 100, f"error: {detail}")
         return "error"
 
     if mtype == "execution_interrupted" and _ours():
@@ -484,6 +531,8 @@ def submit_and_monitor(
         _set_status(bridge_node, f"invalid prompt payload: {type(prompt_payload).__name__}")
         return None, "error"
 
+    labels = node_labels(prompt_payload)
+
     response: Dict[str, Any] = submit_response or {}
     if submit_response is None:
         url = f"{_base_url(host, port)}/prompt"
@@ -510,6 +559,7 @@ def submit_and_monitor(
         return None, "unknown"
 
     status = monitor_execution(
-        bridge_node, host, port, prompt_id, client_id, total_timeout=total_timeout
+        bridge_node, host, port, prompt_id, client_id,
+        total_timeout=total_timeout, labels=labels,
     )
     return prompt_id, status

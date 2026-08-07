@@ -395,6 +395,120 @@ def check_decode_invalid_knob(paths):
     _ok("decode_video: invalid NUKE_BRIDGE_VIDEO_RGB_DEPTH fails before path/subprocess work")
 
 
+def check_pull_mocked():
+    """Deterministic FromNukeVideo.pull: mocked HTTP + decode, no network."""
+    orig_post = nodes.requests.post
+    orig_get = nodes.requests.get
+    orig_decode = nodes.video_io.decode_video
+    captured = {}
+    chunks = [b"chunk-a", b"chunk-b", b"chunk-c"]
+    joined = b"".join(chunks)
+
+    class _PostResp:
+        status_code = 200
+
+        def __init__(self, payload):
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+    class _GetResp:
+        status_code = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def iter_content(self, chunk_size):
+            return iter(chunks)
+
+    def fake_post(url, json=None, timeout=None):
+        captured["post_url"] = url
+        return _PostResp({
+            "ok": True,
+            "asset_id": "mocked",
+            "main_url": "http://0.0.0.0:8765/asset/mocked/main",
+            "mask_url": "http://0.0.0.0:8765/asset/mocked/mask",
+            "metadata": {"frame_count": 3, "fps": 24.0, "prompt": "mocked prompt"},
+        })
+
+    def fake_get(url, stream=False, timeout=None):
+        captured.setdefault("get_urls", []).append(url)
+        return _GetResp()
+
+    def fake_decode(main_path, mask_path, expected_frames=None, progress_cb=None):
+        with open(main_path, "rb") as fh:
+            assert fh.read() == joined, "main download bytes mismatch"
+        with open(mask_path, "rb") as fh:
+            assert fh.read() == joined, "mask download bytes mismatch"
+        captured["decode_called"] = True
+        image = nodes.torch.zeros((3, 8, 8, 3), dtype=nodes.torch.float32)
+        mask = nodes.torch.zeros((3, 8, 8), dtype=nodes.torch.float32)
+        return image, mask, 8, 8, 3
+
+    nodes.requests.post = fake_post
+    nodes.requests.get = fake_get
+    nodes.video_io.decode_video = fake_decode
+    try:
+        image, mask, meta_json, w, h, fc, fps, prompt = nodes.FromNukeVideo().pull(
+            bridge_id="b1", host="100.64.0.2", port=8765,
+            frame_start=-1, frame_end=-1, fps=24.0, format="mov",
+            mov_codec="prores_422hq", colorspace="default", timeout=5.0,
+        )
+        assert captured["post_url"] == "http://100.64.0.2:8765/bridge/b1/video", captured["post_url"]
+        assert len(captured["get_urls"]) == 2, captured["get_urls"]
+        assert all(u.startswith("http://100.64.0.2:8765/asset/") for u in captured["get_urls"]), captured["get_urls"]
+        assert captured["decode_called"] and prompt == "mocked prompt"
+        assert json.loads(meta_json)["frame_count"] == 3
+        assert tuple(image.shape) == (3, 8, 8, 3)
+    finally:
+        nodes.requests.post = orig_post
+        nodes.requests.get = orig_get
+        nodes.video_io.decode_video = orig_decode
+    _ok("mocked pull: 0.0.0.0 asset URLs rebuilt to configured host, chunk bytes exact, prompt output present")
+
+
+def check_push_mocked():
+    """Deterministic ToNukeVideo.push: mocked encode + HTTP, no network."""
+    orig_encode = nodes.video_io.encode_video
+    orig_post = nodes.requests.post
+    captured = {}
+
+    class _Resp:
+        status_code = 200
+        text = ""
+
+    def fake_encode(image, path, fmt, mov_codec, fps, **kwargs):
+        with open(path, "wb") as fh:
+            fh.write(b"fake movie bytes")
+
+    def fake_post(url, data=None, headers=None, timeout=None):
+        captured["post_url"] = url
+        assert hasattr(data, "read") and not isinstance(data, (bytes, bytearray)), \
+            f"expected readable file object, got {type(data).__name__}"
+        assert data.read() == b"fake movie bytes"
+        return _Resp()
+
+    nodes.video_io.encode_video = fake_encode
+    nodes.requests.post = fake_post
+    try:
+        image = nodes.torch.zeros((4, 8, 8, 3), dtype=nodes.torch.float32)
+        out = nodes.ToNukeVideo().push(
+            image=image, bridge_id="b1", host="100.64.0.2", port=8765,
+            video_meta_json="{}", filename_prefix="pfx", format_override="auto",
+            mov_codec_override="auto", colorspace="default", timeout=5.0,
+        )
+        assert captured["post_url"] == "http://100.64.0.2:8765/bridge/b1/video_result", captured["post_url"]
+        assert out[0] is image
+    finally:
+        nodes.video_io.encode_video = orig_encode
+        nodes.requests.post = orig_post
+    _ok("mocked push: encoded file streamed as file object, 200 completes")
+
+
 def main():
     check_binaries()
     with _tmpdir("nvstream_fixture_") as tmp:
@@ -411,6 +525,8 @@ def main():
         grad_paths = _write_gradient(tmp)
         check_rgb48_fidelity(grad_paths)
         check_decode_invalid_knob(paths)
+        check_pull_mocked()
+        check_push_mocked()
     print("ALL CHECKS PASSED", flush=True)
 
 

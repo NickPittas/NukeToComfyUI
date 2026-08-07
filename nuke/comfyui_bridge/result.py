@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import time
-from typing import Any
+from typing import Any, Optional
 
 from . import napi
 
@@ -25,14 +25,15 @@ def _unique_path(output_directory: str, prefix: str, ext: str) -> str:
 def save_result(
     body: bytes,
     output_directory: str,
-    filename_prefix: str,
-    colorspace: str,
+    filename_prefix: Optional[str] = None,
+    colorspace: str = "",
     bridge_node: Any = None,
     create_read: bool = False,
     ext: str = "png",
 ) -> str:
     """Write `body` to a deterministic unique path; optionally add a Read node."""
-    path = _unique_path(output_directory, filename_prefix or "comfy_result", ext)
+    prefix = filename_prefix or f"{napi.comp_stem()}_result"
+    path = _unique_path(output_directory, prefix, ext)
     with open(path, "wb") as fh:
         fh.write(body)
 

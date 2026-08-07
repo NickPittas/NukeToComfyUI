@@ -24,6 +24,34 @@ def _bridge_path_id(bridge_id: str) -> str:
     return (bridge_id or "_active").strip() or "_active"
 
 
+def _rebuild_asset_url(returned: str, base: str) -> str:
+    """Rebuild a returned asset URL on the configured base (path only).
+
+    A server bound to 0.0.0.0 answers with URLs pointing at 0.0.0.0, which is
+    unreachable; using only the returned path keeps downloads on the host the
+    node was told to use.
+    """
+    parsed = urllib.parse.urlparse(str(returned or ""))
+    if not parsed.path:
+        raise RuntimeError(f"FromNukeVideo: invalid asset URL {returned!r}")
+    return urllib.parse.urljoin(base, parsed.path)
+
+
+def _stream_download(url: str, dest: str, timeout: float) -> None:
+    """Stream a GET response into `dest` in fixed 1 MiB chunks."""
+    with requests.get(url, stream=True, timeout=float(timeout)) as resp:
+        if resp.status_code != 200:
+            raise RuntimeError(
+                f"FromNukeVideo: asset download {url} returned {resp.status_code}: {resp.text[:200]}"
+            )
+        with open(dest, "wb") as fh:
+            for chunk in resp.iter_content(chunk_size=1024 * 1024):
+                if chunk:
+                    fh.write(chunk)
+    if os.path.getsize(dest) <= 0:
+        raise RuntimeError(f"FromNukeVideo: empty asset download from {url}")
+
+
 def _format_value(value: Any) -> str:
     """Normalize format, tolerating old workflows where timeout shifted here."""
     fmt = str(value or "png8").strip().lower()
@@ -218,31 +246,45 @@ class FromNukeVideo:
             "mov_codec": (["prores_422hq", "prores_4444"], {"default": "prores_422hq"}),
             "colorspace": (["default", "raw", "sRGB", "rec709"], {"default": "default"}),
             "timeout": ("FLOAT", {"default": 120.0, "min": 1.0, "max": 3600.0}),
-        }, "optional": {
-            "main_path": ("STRING", {"default": "", "multiline": False, "forceInput": True, "socketless": True}),
-            "mask_path": ("STRING", {"default": "", "multiline": False, "forceInput": True, "socketless": True}),
-            "metadata_json": ("STRING", {"default": "{}", "multiline": True, "forceInput": True, "socketless": True}),
         }}
 
-    RETURN_TYPES = ("IMAGE", "MASK", "STRING", "INT", "INT", "INT", "FLOAT")
-    RETURN_NAMES = ("image", "mask", "video_meta_json", "width", "height", "frame_count", "fps")
+    RETURN_TYPES = ("IMAGE", "MASK", "STRING", "INT", "INT", "INT", "FLOAT", "STRING")
+    RETURN_NAMES = ("image", "mask", "video_meta_json", "width", "height", "frame_count", "fps", "prompt")
     FUNCTION = "pull"
     CATEGORY = "NukeBridge"
 
-    def pull(self, bridge_id: str, host: str, port: int, frame_start: int, frame_end: int, fps: float, format: str, mov_codec: str, colorspace: str, timeout: float, main_path: str = "", mask_path: str = "", metadata_json: str = "{}"):
-        if not main_path or not mask_path:
-            raise RuntimeError("FromNukeVideo: Nuke did not inject rendered video paths")
-        if not os.path.isfile(main_path):
-            raise RuntimeError(f"FromNukeVideo: missing main_path {main_path!r}")
-        if not os.path.isfile(mask_path):
-            raise RuntimeError(f"FromNukeVideo: missing mask_path {mask_path!r}")
-        meta = json.loads(metadata_json or "{}")
+    def pull(self, bridge_id: str, host: str, port: int, frame_start: int, frame_end: int, fps: float, format: str, mov_codec: str, colorspace: str, timeout: float):
+        url = f"{_base_url(host, port)}/bridge/{_bridge_path_id(bridge_id)}/video"
+        resp = requests.post(url, json={
+            "frame_start": int(frame_start),
+            "frame_end": int(frame_end),
+            "fps": float(fps),
+            "format": str(format),
+            "mov_codec": str(mov_codec),
+            "colorspace": _colorspace_value(colorspace),
+        }, timeout=float(timeout))
+        if resp.status_code != 200:
+            raise RuntimeError(
+                f"FromNukeVideo: Nuke /video returned {resp.status_code}: {resp.text[:300]}"
+            )
+        data = resp.json()
+        if not data.get("main_url") or not data.get("mask_url"):
+            raise RuntimeError(
+                f"FromNukeVideo: Nuke /video missing asset URLs: {str(data)[:200]}"
+            )
+        meta = data.get("metadata") or {}
         expected = int(meta["frame_count"]) if meta.get("frame_count") else None
         report = _VideoProgress(2 * expected + 1 if expected else None)
-        image, mask, width, height, frame_count = video_io.decode_video(
-            main_path, mask_path, expected_frames=expected, progress_cb=report
-        )
-        return image, mask, json.dumps(meta), width, height, frame_count, float(meta.get("fps") or fps)
+        base = _base_url(host, port)
+        with tempfile.TemporaryDirectory(prefix="nuke_bridge_fromnuke_") as tmp:
+            main_path = os.path.join(tmp, "main.mov" if format == "mov" else "main.mp4")
+            mask_path = os.path.join(tmp, "mask.mp4")
+            _stream_download(_rebuild_asset_url(data["main_url"], base), main_path, timeout)
+            _stream_download(_rebuild_asset_url(data["mask_url"], base), mask_path, timeout)
+            image, mask, width, height, frame_count = video_io.decode_video(
+                main_path, mask_path, expected_frames=expected, progress_cb=report
+            )
+        return image, mask, json.dumps(meta), width, height, frame_count, float(meta.get("fps") or fps), str(meta.get("prompt") or "")
 
 
 class ToNukeVideo:
@@ -290,11 +332,6 @@ class ToNukeVideo:
         source_meta = video_io.probe_source_meta(str(meta.get("main_path") or ""))
         B = int(image.shape[0])
         report = _VideoProgress(B + 3)
-        with tempfile.TemporaryDirectory(prefix="nuke_bridge_video_result_") as tmp:
-            path = os.path.join(tmp, "result.mov" if fmt == "mov" else "result.mp4")
-            video_io.encode_video(image, path, fmt, mov_codec, fps, source_meta=source_meta, progress_cb=report, extra_steps=2)
-            with open(path, "rb") as fh:
-                body = fh.read()
         headers = {
             "Content-Type": "video/quicktime" if fmt == "mov" else "video/mp4",
             "X-NukeBridge-Filename-Prefix": filename_prefix or "comfy_video_result",
@@ -307,8 +344,16 @@ class ToNukeVideo:
         cs = _colorspace_value(colorspace)
         if cs:
             headers["X-NukeBridge-Colorspace"] = cs
-        report(B + 2, B + 3, f"uploading {len(body) / (1024 * 1024):.1f} MiB to Nuke")
-        resp = requests.post(f"{_base_url(host, port)}/bridge/{_bridge_path_id(bridge_id)}/video_result", data=body, headers=headers, timeout=float(timeout))
+        with tempfile.TemporaryDirectory(prefix="nuke_bridge_video_result_") as tmp:
+            path = os.path.join(tmp, "result.mov" if fmt == "mov" else "result.mp4")
+            video_io.encode_video(image, path, fmt, mov_codec, fps, source_meta=source_meta, progress_cb=report, extra_steps=2)
+            size = os.path.getsize(path)
+            report(B + 2, B + 3, f"uploading {size / (1024 * 1024):.1f} MiB to Nuke")
+            with open(path, "rb") as fh:
+                resp = requests.post(
+                    f"{_base_url(host, port)}/bridge/{_bridge_path_id(bridge_id)}/video_result",
+                    data=fh, headers=headers, timeout=float(timeout),
+                )
         if resp.status_code != 200:
             raise RuntimeError(f"ToNukeVideo: Nuke /video_result returned {resp.status_code}: {resp.text[:300]}")
         report(B + 3, B + 3, "complete")
