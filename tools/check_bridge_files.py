@@ -9,7 +9,7 @@ from typing import Any
 REPO_NUKE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "nuke"))
 sys.path.insert(0, REPO_NUKE_DIR)
 
-from comfyui_bridge import napi, result, server, session_files, video  # noqa: E402
+from comfyui_bridge import napi, render, result, server, session_files, video  # noqa: E402
 
 
 def _bridge_health(port: int) -> bool:
@@ -115,10 +115,11 @@ def test_export_video_bundle() -> None:
     """mov/mp4 exports build comp-prefixed source/mask paths (regression: undefined
     `suffix` NameError) and register only their exact files."""
     written: list[str] = []
+    mask_sources: list[str] = []
 
     class _FakeKnob:
         def value(self) -> str:
-            return "source alpha"
+            return "invert mask input"
 
     class _FakeFormat:
         def width(self) -> int:
@@ -133,7 +134,7 @@ def test_export_video_bundle() -> None:
             return self
 
         def knob(self, name: str) -> Any:
-            return _FakeKnob() if name == "mask_source" else None
+            return _FakeKnob() if name == "video_mask_source" else None
 
         def format(self) -> Any:
             return _FakeFormat()
@@ -146,10 +147,11 @@ def test_export_video_bundle() -> None:
     originals = (video._cache_key, video._write_movie, video._mask_chain, napi.call, napi.comp_stem)
     video._cache_key = lambda _bridge, _first, _last, _fps, fmt, _codec, _cs: ("key", fmt)
     video._write_movie = _fake_write
-    video._mask_chain = lambda *_a, **_kw: object()
+    video._mask_chain = lambda _nuke, _bridge, source, _nodes: mask_sources.append(source) or object()
     napi.call = lambda fn, *a, **kw: fn(*a, **kw)
     napi.comp_stem = lambda: "Shot_010"  # type: ignore[assignment]
     try:
+        video.clear_cache()
         with tempfile.TemporaryDirectory() as td:
             stray = os.path.join(td, "untracked.png")
             with open(stray, "wb") as fh:
@@ -165,13 +167,86 @@ def test_export_video_bundle() -> None:
                 assert os.path.basename(mask).endswith(".mp4"), mask
                 assert bundle["metadata"]["format"] == fmt
                 assert os.path.isfile(main) and os.path.getsize(main) > 0
+            assert mask_sources == ["invert mask input", "invert mask input"]
+            assert len(video._VIDEO_CACHE) == 2
+            video.clear_cache()
+            assert not video._VIDEO_CACHE
             # exactly the 4 registered bundle files are tracked/removed; stray untouched.
             assert session_files.clear() == (4, 0)
             assert os.path.exists(stray)
             for p in written:
                 assert not os.path.exists(p)
     finally:
+        video.clear_cache()
         (video._cache_key, video._write_movie, video._mask_chain, napi.call, napi.comp_stem) = originals
+
+
+def test_clear_cache_rerenders_video_mask() -> None:
+    """Changing the Video mask then using the real Clear Cache entrypoint must
+    delete the old bundle and force both movies to render again."""
+    values = {"bridge_id": "bridge-1", "video_mask_source": "source alpha"}
+    writes: list[str] = []
+    mask_sources: list[str] = []
+
+    class _FakeKnob:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def value(self) -> str:
+            return values[self.name]
+
+    class _FakeFormat:
+        def width(self) -> int:
+            return 640
+
+        def height(self) -> int:
+            return 480
+
+    class _FakeNode:
+        def input(self, index: int) -> Any:
+            assert index in (0, 1)
+            return self if index == 0 else None
+
+        def knob(self, name: str) -> Any:
+            return _FakeKnob(name) if name in values else None
+
+        def format(self) -> Any:
+            return _FakeFormat()
+
+    def _fake_write(_nuke: Any, _input: Any, path: str, *_a: Any, **_kw: Any) -> None:
+        with open(path, "wb") as fh:
+            fh.write(b"x")
+        writes.append(path)
+
+    originals = (video._write_movie, video._mask_chain, napi.call, napi.comp_stem)
+    video._write_movie = _fake_write
+    video._mask_chain = lambda _nuke, _bridge, source, _nodes: mask_sources.append(source) or object()
+    napi.call = lambda fn, *a, **kw: fn(*a, **kw)
+    napi.comp_stem = lambda: "Shot_010"  # type: ignore[assignment]
+    try:
+        render.clear_cache_from_node()
+        with tempfile.TemporaryDirectory() as td:
+            node = _FakeNode()
+            first = video.export_video_bundle(node, td, 1, 2, 24.0, "mov", "prores_422hq", "rec709")
+            cached = video.export_video_bundle(node, td, 1, 2, 24.0, "mov", "prores_422hq", "rec709")
+            assert cached is first
+            assert len(writes) == 2
+
+            values["video_mask_source"] = "invert source alpha"
+            render.clear_cache_from_node()
+            assert not video._VIDEO_CACHE
+            assert not os.path.exists(first["main_path"])
+            assert not os.path.exists(first["mask_path"])
+
+            second = video.export_video_bundle(node, td, 1, 2, 24.0, "mov", "prores_422hq", "rec709")
+            assert second["main_path"] != first["main_path"]
+            assert second["mask_path"] != first["mask_path"]
+            assert len(writes) == 4
+            assert mask_sources == ["source alpha", "invert source alpha"]
+            assert session_files.clear() == (2, 0)
+    finally:
+        render.clear_cache_from_node()
+        (video._write_movie, video._mask_chain, napi.call, napi.comp_stem) = originals
 
 
 def main() -> None:
@@ -179,6 +254,7 @@ def main() -> None:
     test_session_files()
     test_save_result()
     test_export_video_bundle()
+    test_clear_cache_rerenders_video_mask()
     test_start_server_restart_and_rollback()
     print("check_bridge_files: PASS")
 

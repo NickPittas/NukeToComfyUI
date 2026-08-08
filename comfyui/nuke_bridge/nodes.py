@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import urllib.parse
-import uuid
 import json
 import os
 import tempfile
@@ -163,9 +162,7 @@ class FromNuke:
 
     @staticmethod
     def IS_CHANGED(**kwargs: Any) -> float:
-        # ponytail: force re-pull on every execution; if a stable hash of the
-        # upstream Nuke image is needed later, replace this with that hash.
-        return float(uuid.uuid4().int)
+        return float("NaN")
 
 
 class ToNuke:
@@ -285,6 +282,10 @@ class FromNukeVideo:
                 main_path, mask_path, expected_frames=expected, progress_cb=report
             )
         return image, mask, json.dumps(meta), width, height, frame_count, float(meta.get("fps") or fps), str(meta.get("prompt") or "")
+
+    @staticmethod
+    def IS_CHANGED(**kwargs: Any) -> float:
+        return float("NaN")
 
 
 class ToNukeVideo:

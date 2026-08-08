@@ -509,6 +509,13 @@ def check_push_mocked():
     _ok("mocked push: encoded file streamed as file object, 200 completes")
 
 
+def check_video_pull_is_changed():
+    first = nodes.FromNukeVideo.IS_CHANGED()
+    second = nodes.FromNukeVideo.IS_CHANGED()
+    assert first != first and second != second, "IS_CHANGED must return NaN"
+    _ok("FromNukeVideo always re-pulls so Clear Cache can force rerender")
+
+
 def main():
     check_binaries()
     with _tmpdir("nvstream_fixture_") as tmp:
@@ -527,6 +534,7 @@ def main():
         check_decode_invalid_knob(paths)
         check_pull_mocked()
         check_push_mocked()
+        check_video_pull_is_changed()
     print("ALL CHECKS PASSED", flush=True)
 
 

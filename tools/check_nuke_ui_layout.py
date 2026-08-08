@@ -14,6 +14,7 @@ class Knob:
     def __init__(self, name, label="", values=None, klass=""):
         self.name = name
         self.label = label
+        self.values = list(values or [])
         self._value = None
         self.width = None
         self.flags = []
@@ -92,6 +93,8 @@ def check_tab_layout():
     assert names.index("run_selected_workflow") < names.index("Video")
 
     assert names.index("Video") < names.index("video_prompt") < names.index("ComfyUI")
+    assert names.index("video_prompt") < names.index("video_mask_source") < names.index("video_format")
+    assert fake_node.knob("video_mask_source").values == list(node.MASK_SOURCES)
     assert names.index("video_workflow_choices") < names.index("ComfyUI")
     assert names.index("run_selected_workflow_video") < names.index("ComfyUI")
 

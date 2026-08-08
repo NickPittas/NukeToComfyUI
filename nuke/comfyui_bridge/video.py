@@ -251,13 +251,25 @@ def _node_name(node: Any) -> str:
     return str(node)
 
 
+def _video_mask_source(bridge_node: Any) -> str:
+    for name in ("video_mask_source", "mask_source"):
+        try:
+            knob = bridge_node.knob(name)
+            value = knob.value() if knob is not None else ""
+            if value:
+                return str(value)
+        except Exception:
+            pass
+    return "source alpha"
+
+
 def _cache_key(bridge_node: Any, frame_start: int, frame_end: int, fps: float, fmt: str, mov_codec: str, colorspace: str) -> tuple:
     def _build() -> tuple:
         return (
             str(napi.knob_value(bridge_node, "bridge_id") or ""),
             _node_name(bridge_node.input(0)),
             _node_name(bridge_node.input(1)),
-            str(napi.knob_value(bridge_node, "mask_source") or "source alpha"),
+            _video_mask_source(bridge_node),
             int(frame_start),
             int(frame_end),
             float(fps),
@@ -300,7 +312,7 @@ def export_video_bundle(bridge_node: Any, output_directory: str, frame_start: in
         temp_nodes: list[Any] = []
         try:
             _write_movie(nuke, src, main_path, frame_start, frame_end, fmt, mov_codec, colorspace)
-            mask_source = str(napi.knob_value(bridge_node, "mask_source") or "source alpha")
+            mask_source = _video_mask_source(bridge_node)
             mask_node = _mask_chain(nuke, bridge_node, mask_source, temp_nodes)
             _write_movie(nuke, mask_node, mask_path, frame_start, frame_end, "mp4", "prores_422hq", "")
             f = src.format()

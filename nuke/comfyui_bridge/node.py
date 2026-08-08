@@ -108,6 +108,7 @@ def _knob_specs() -> List[Tuple[str, Callable[[Any], Any]]]:
         ),
         ("Video", lambda n: n.Tab_Knob("Video")),
         ("video_prompt", lambda n: _multiline_or_string(n, "video_prompt", "prompt")),
+        ("video_mask_source", lambda n: n.Enumeration_Knob("video_mask_source", "mask source", list(MASK_SOURCES))),
         ("video_format", lambda n: n.Enumeration_Knob("video_format", "video_format", list(VIDEO_FORMATS))),
         ("video_mov_codec", lambda n: n.Enumeration_Knob("video_mov_codec", "mov codec", list(VIDEO_MOV_CODECS))),
         ("video_first", lambda n: n.Int_Knob("video_first", "first")),
@@ -543,6 +544,7 @@ def _create_group_fallback(nuke: Any) -> Any:
     # Selection of enum defaults matches the gizmo.
     for name, value in (
         ("mask_source", MASK_SOURCES[0]),
+        ("video_mask_source", MASK_SOURCES[0]),
         ("send_format", SEND_FORMATS[0]),
         ("workflow_choices", "(none)"),
         ("video_workflow_choices", "(none)"),
