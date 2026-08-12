@@ -18,13 +18,21 @@ from __future__ import annotations
 from typing import Any
 
 from . import napi
-from .node import NODE_CLASS_NAME, ensure_knobs, initialize_defaults, sync_prompts
+from .node import (
+    NODE_CLASS_NAME,
+    ensure_knobs,
+    initialize_defaults,
+    sync_prompts,
+    update_video_range_display,
+)
 
 
 _REGISTERED = False
 
 
 _PROMPT_KNOBS = ("prompt", "video_prompt")
+_WORKFLOW_KNOBS = {"workflow_choices": "image", "video_workflow_choices": "video"}
+_VIDEO_RANGE_KNOBS = {"video_first", "video_last", "video_normalize_8n1"}
 
 
 def _node_is_ours(node: Any) -> bool:
@@ -96,10 +104,15 @@ def _on_knob_changed() -> None:
         name = knob.name()
     except Exception:
         return
-    if name not in _PROMPT_KNOBS:
-        return
     try:
-        sync_prompts(node, name)
+        if name in _PROMPT_KNOBS:
+            sync_prompts(node, name)
+        elif name in _WORKFLOW_KNOBS:
+            from .workflow_selection import refresh_workflow_input_choices
+
+            refresh_workflow_input_choices(node, _WORKFLOW_KNOBS[name], reset=True)
+        elif name in _VIDEO_RANGE_KNOBS:
+            update_video_range_display(node)
     except Exception:
         # A callback must never break the edit the user is performing.
         pass

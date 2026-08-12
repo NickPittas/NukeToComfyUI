@@ -100,6 +100,7 @@ def _knob_specs() -> List[Tuple[str, Callable[[Any], Any]]]:
             ),
         ),
         ("workflow_choices", lambda n: n.Enumeration_Knob("workflow_choices", "workflow", ["(none)"])),
+        ("image_workflow_input", lambda n: n.Enumeration_Knob("image_workflow_input", "FromNuke input", ["(none)"])),
         (
             "run_selected_workflow",
             lambda n: _pyscript(
@@ -114,6 +115,8 @@ def _knob_specs() -> List[Tuple[str, Callable[[Any], Any]]]:
         ("video_first", lambda n: n.Int_Knob("video_first", "first")),
         ("video_last", lambda n: n.Int_Knob("video_last", "last")),
         ("video_fps", lambda n: n.Double_Knob("video_fps", "fps")),
+        ("video_normalize_8n1", lambda n: n.Boolean_Knob("video_normalize_8n1", "expand to 8n+1")),
+        ("video_range_display", lambda n: n.String_Knob("video_range_display", "requested / effective")),
         ("video_colorspace", lambda n: n.Enumeration_Knob("video_colorspace", "video colorspace", [])),
         (
             "refresh_video_colorspaces",
@@ -122,6 +125,7 @@ def _knob_specs() -> List[Tuple[str, Callable[[Any], Any]]]:
             ),
         ),
         ("video_workflow_choices", lambda n: n.Enumeration_Knob("video_workflow_choices", "workflow", ["(none)"])),
+        ("video_workflow_input", lambda n: n.Enumeration_Knob("video_workflow_input", "FromNukeVideo input", ["(none)"])),
         (
             "run_selected_workflow_video",
             lambda n: _pyscript(
@@ -197,7 +201,8 @@ def _apply_layout(node: Any, nuke: Any) -> None:
 
     # Wide text/multiline/selector knobs (no width on int/bool/button knobs).
     for knob_name in (
-        "prompt", "video_prompt", "workflow_choices", "video_workflow_choices",
+        "prompt", "video_prompt", "workflow_choices", "image_workflow_input",
+        "video_workflow_choices", "video_workflow_input", "video_range_display",
         "log", "bridge_id", "host", "bridge_host", "comfyui_host",
         "output_directory", "status", "last_result",
     ):
@@ -249,6 +254,10 @@ def _apply_layout(node: Any, nuke: Any) -> None:
         "save_defaults",
         tooltip="Save these values and restart the Nuke bridge listener immediately.",
     )
+    try:
+        node.knob("video_range_display").setEnabled(False)
+    except Exception:
+        pass
 
 
 def _append_all_knobs(group_node: Any, nuke: Any) -> None:
@@ -413,6 +422,27 @@ def sync_prompts(node: Any, changed_name: str) -> None:
         vp.setValue(pv)
 
 
+def update_video_range_display(node: Any) -> None:
+    from .video import normalized_frame_range
+
+    try:
+        first = int(node.knob("video_first").value())
+        last = int(node.knob("video_last").value())
+        enabled = bool(node.knob("video_normalize_8n1").value())
+        effective_first, effective_last = normalized_frame_range(first, last, enabled)
+        requested_count = last - first + 1
+        effective_count = effective_last - effective_first + 1
+        text = f"{first}-{last} ({requested_count})"
+        if enabled:
+            text += f" -> {effective_first}-{effective_last} ({effective_count})"
+        node.knob("video_range_display").setValue(text)
+    except Exception as exc:
+        try:
+            node.knob("video_range_display").setValue(str(exc))
+        except Exception:
+            pass
+
+
 def converge_prompts(node: Any) -> None:
     """Align saved prompt/video_prompt after load. `prompt` wins unless empty."""
     p = node.knob("prompt")
@@ -487,6 +517,7 @@ def initialize_defaults(node: Any) -> None:
     except Exception:
         pass
     converge_prompts(node)
+    update_video_range_display(node)
 
 
 # --------------------------------------------------------------------------
@@ -547,7 +578,9 @@ def _create_group_fallback(nuke: Any) -> Any:
         ("video_mask_source", MASK_SOURCES[0]),
         ("send_format", SEND_FORMATS[0]),
         ("workflow_choices", "(none)"),
+        ("image_workflow_input", "(none)"),
         ("video_workflow_choices", "(none)"),
+        ("video_workflow_input", "(none)"),
     ):
         try:
             node.knob(name).setValue(0)

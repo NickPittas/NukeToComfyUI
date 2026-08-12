@@ -46,20 +46,97 @@ def _expire_locked(now: float) -> None:
             _WORKFLOWS.pop(wid, None)
 
 
+def _prompt_from_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
+    prompt = entry.get("prompt")
+    if isinstance(prompt, dict) and isinstance(prompt.get("output"), dict):
+        prompt = prompt["output"]
+    elif isinstance(prompt, dict) and isinstance(prompt.get("prompt"), dict):
+        prompt = prompt["prompt"]
+    return prompt if isinstance(prompt, dict) else {}
+
+
+def _linked_node_ids(node: Dict[str, Any]) -> List[str]:
+    inputs = node.get("inputs") if isinstance(node.get("inputs"), dict) else {}
+    linked: List[str] = []
+    for value in inputs.values():
+        if isinstance(value, (list, tuple)) and len(value) == 2:
+            source_id = value[0]
+            if isinstance(source_id, (str, int)):
+                linked.append(str(source_id))
+    return linked
+
+
+def _upstream_source_ids(
+    prompt: Dict[str, Any], node_id: str, source_class: str
+) -> List[str]:
+    found: List[str] = []
+    seen = {str(node_id)}
+    stack = _linked_node_ids(prompt.get(str(node_id), {}))
+    while stack:
+        current_id = stack.pop()
+        if current_id in seen:
+            continue
+        seen.add(current_id)
+        current = prompt.get(current_id)
+        if not isinstance(current, dict):
+            continue
+        if current.get("class_type") == source_class:
+            found.append(current_id)
+            continue
+        stack.extend(_linked_node_ids(current))
+    return sorted(set(found))
+
+
+def _bridge_nodes(entry: Dict[str, Any]) -> List[Dict[str, Any]]:
+    prompt = _prompt_from_entry(entry)
+    nodes: List[Dict[str, Any]] = []
+    output_sources = {"ToNuke": "FromNuke", "ToNukeVideo": "FromNukeVideo"}
+    for node_id, node in prompt.items():
+        if not isinstance(node, dict):
+            continue
+        class_type = str(node.get("class_type") or "")
+        if class_type not in ("FromNuke", "FromNukeVideo", "ToNuke", "ToNukeVideo"):
+            continue
+        inputs = node.get("inputs") if isinstance(node.get("inputs"), dict) else {}
+        raw_bridge_id = inputs.get("bridge_id", "")
+        meta = node.get("_meta") if isinstance(node.get("_meta"), dict) else {}
+        info: Dict[str, Any] = {
+            "node_id": str(node_id),
+            "title": str(meta.get("title") or f"{class_type} #{node_id}"),
+            "class_type": class_type,
+            "bridge_id": raw_bridge_id if isinstance(raw_bridge_id, str) else "",
+        }
+        if class_type in output_sources:
+            info["source_node_ids"] = _upstream_source_ids(
+                prompt, str(node_id), output_sources[class_type]
+            )
+        nodes.append(info)
+    return nodes
+
+
 def list_workflows() -> List[Dict[str, Any]]:
-    """Public listing: metadata only, no prompt payload."""
+    """Public listing: routing metadata only, no prompt payload."""
     now = time.time()
     with _LOCK:
         _expire_locked(now)
-        return [
-            {
-                "id": v.get("id"),
-                "name": v.get("name") or v.get("id"),
-                "has_from_nuke": bool(v.get("has_from_nuke")),
-                "has_to_nuke": bool(v.get("has_to_nuke")),
-            }
-            for v in _WORKFLOWS.values()
-        ]
+        workflows: List[Dict[str, Any]] = []
+        for value in _WORKFLOWS.values():
+            bridge_nodes = _bridge_nodes(value)
+            workflows.append({
+                "id": value.get("id"),
+                "name": value.get("name") or value.get("id"),
+                "has_from_nuke": bool(value.get("has_from_nuke")),
+                "has_to_nuke": bool(value.get("has_to_nuke")),
+                "from_nuke_nodes": [
+                    node for node in bridge_nodes
+                    if node["class_type"] in ("FromNuke", "FromNukeVideo")
+                ],
+                "to_nuke_nodes": [
+                    node for node in bridge_nodes
+                    if node["class_type"] in ("ToNuke", "ToNukeVideo")
+                ],
+            })
+        return workflows
 
 
 def get_workflow(workflow_id: str) -> Optional[Dict[str, Any]]:

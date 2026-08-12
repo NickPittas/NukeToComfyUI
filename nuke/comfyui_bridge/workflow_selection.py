@@ -21,8 +21,10 @@ import urllib.request
 import uuid
 from typing import Any, Dict, List, Optional
 
-# bridge_id -> last fetched workflow list (metadata only).
+# Nuke bridge_id -> last fetched workflow list (metadata only).
 _LAST_LIST: Dict[str, List[Dict[str, Any]]] = {}
+_SOURCE_CLASS = {"image": "FromNuke", "video": "FromNukeVideo"}
+_TARGET_KNOB = {"image": "image_workflow_input", "video": "video_workflow_input"}
 
 
 def _base_url(host: str, port: int) -> str:
@@ -89,6 +91,7 @@ def refresh_workflow_choices(bridge_node: Any) -> int:
     labels = _enum_labels(workflows) if workflows else ["(none)"]
     _set_choices(bridge_node, labels, "workflow_choices")
     _set_choices(bridge_node, labels, "video_workflow_choices")
+    refresh_workflow_input_choices(bridge_node)
 
     # Keep the existing colorspace menus current, but never let that optional
     # Nuke-side refresh block the workflow list that this action promises.
@@ -134,7 +137,16 @@ def _set_choices(bridge_node: Any, labels: List[str], knob_name: str = "workflow
         pass
 
 
-def _selected_workflow_id(bridge_node: Any, media_mode: str = "image") -> Optional[str]:
+def _enum_index(bridge_node: Any, knob_name: str) -> int:
+    from . import napi
+
+    try:
+        return int(napi.call(lambda: bridge_node.knob(knob_name).getValue()))
+    except Exception:
+        return int(napi.knob_value(bridge_node, knob_name))
+
+
+def _selected_workflow(bridge_node: Any, media_mode: str = "image") -> Optional[Dict[str, Any]]:
     from . import napi
 
     mode = _media_mode(media_mode)
@@ -144,13 +156,63 @@ def _selected_workflow_id(bridge_node: Any, media_mode: str = "image") -> Option
     if not workflows:
         return None
     try:
-        idx = int(napi.knob_value(bridge_node, knob_name) or 0)
+        idx = _enum_index(bridge_node, knob_name)
     except Exception:
         idx = 0
-    if idx < 0 or idx >= len(workflows):
-        return None
-    wid = workflows[idx].get("id")
+    return workflows[idx] if 0 <= idx < len(workflows) else None
+
+
+def _selected_workflow_id(bridge_node: Any, media_mode: str = "image") -> Optional[str]:
+    workflow = _selected_workflow(bridge_node, media_mode)
+    wid = workflow.get("id") if workflow else None
     return str(wid) if wid else None
+
+
+def _workflow_sources(workflow: Optional[Dict[str, Any]], media_mode: str) -> List[Dict[str, Any]]:
+    mode = _media_mode(media_mode)
+    if not workflow:
+        return []
+    return [
+        source for source in workflow.get("from_nuke_nodes") or []
+        if isinstance(source, dict) and source.get("class_type") == _SOURCE_CLASS[mode]
+    ]
+
+
+def _source_label(source: Dict[str, Any]) -> str:
+    title = str(source.get("title") or source.get("class_type") or "FromNuke")
+    bridge_id = str(source.get("bridge_id") or "(missing automatic ID)")
+    return f"{title} [{bridge_id}] #{source.get('node_id', '?')}"
+
+
+def refresh_workflow_input_choices(
+    bridge_node: Any, media_mode: Optional[str] = None, reset: bool = False
+) -> None:
+    from . import napi
+
+    modes = (_media_mode(media_mode),) if media_mode else ("image", "video")
+    for mode in modes:
+        knob_name = _TARGET_KNOB[mode]
+        sources = _workflow_sources(_selected_workflow(bridge_node, mode), mode)
+        _set_choices(bridge_node, ["(none)"] + [_source_label(source) for source in sources], knob_name)
+        if reset:
+            try:
+                napi.call(lambda: bridge_node.knob(knob_name).setValue(0))
+            except Exception:
+                pass
+
+
+def _selected_workflow_input(bridge_node: Any, media_mode: str) -> Optional[Dict[str, Any]]:
+    from . import napi
+
+    mode = _media_mode(media_mode)
+    sources = _workflow_sources(_selected_workflow(bridge_node, mode), mode)
+    if not sources:
+        return None
+    try:
+        idx = _enum_index(bridge_node, _TARGET_KNOB[mode]) - 1
+    except Exception:
+        idx = -1
+    return sources[idx] if 0 <= idx < len(sources) else None
 
 
 def _media_mode(value: str) -> str:
@@ -214,7 +276,8 @@ def _run_selected_workflow_sync(
         napi.set_knob_value(bridge_node, "status", f"run: no prompt for {wid}")
         return None
     try:
-        prompt = _patch_nuke_bridge_prompt(prompt, bridge_node)
+        mapping = _collect_source_mapping(prompt, wid)
+        prompt = _patch_nuke_bridge_prompt(prompt, bridge_node, mapping)
     except Exception as exc:
         napi.set_knob_value(bridge_node, "status", f"prompt patch failed: {exc}")
         return None
@@ -254,43 +317,176 @@ def _advertised_host(bridge_node: Any) -> str:
     return host
 
 
-def _patch_nuke_bridge_prompt(prompt: Any, bridge_node: Any) -> Any:
-    """Apply Nuke-side bridge settings to NukeBridge nodes before submit."""
+def _prompt_sources(prompt: Any) -> Dict[str, Dict[str, Any]]:
+    if not isinstance(prompt, dict):
+        return {}
+    return {
+        str(node_id): node for node_id, node in prompt.items()
+        if isinstance(node, dict)
+        and node.get("class_type") in ("FromNuke", "FromNukeVideo")
+    }
+
+
+def _linked_node_ids(node: Dict[str, Any]) -> List[str]:
+    inputs = node.get("inputs") if isinstance(node.get("inputs"), dict) else {}
+    linked: List[str] = []
+    for value in inputs.values():
+        if isinstance(value, (list, tuple)) and len(value) == 2:
+            source_id = value[0]
+            if isinstance(source_id, (str, int)):
+                linked.append(str(source_id))
+    return linked
+
+
+def _upstream_source_ids(prompt: Dict[str, Any], node_id: str, source_class: str) -> List[str]:
+    found: List[str] = []
+    seen = {str(node_id)}
+    stack = _linked_node_ids(prompt.get(str(node_id), {}))
+    while stack:
+        current_id = stack.pop()
+        if current_id in seen:
+            continue
+        seen.add(current_id)
+        current = prompt.get(current_id)
+        if not isinstance(current, dict):
+            continue
+        if current.get("class_type") == source_class:
+            found.append(current_id)
+        else:
+            stack.extend(_linked_node_ids(current))
+    return sorted(set(found))
+
+
+def _collect_source_mapping(prompt: Any, workflow_id: str) -> Dict[str, Any]:
     from . import napi
 
-    fmt = str(napi.knob_value(bridge_node, "send_format") or "png8").strip().lower()
-    if fmt not in ("png8", "exr16"):
-        fmt = "png8"
-    colorspace = str(napi.knob_value(bridge_node, "send_colorspace") or "")
-    video_format = str(napi.knob_value(bridge_node, "video_format") or "mov").strip().lower()
-    if video_format not in ("mov", "mp4"):
-        video_format = "mov"
-    video_codec = str(napi.knob_value(bridge_node, "video_mov_codec") or "prores_422hq").strip().lower()
-    if video_codec not in ("prores_422hq", "prores_4444"):
-        video_codec = "prores_422hq"
-    video_colorspace = str(napi.knob_value(bridge_node, "video_colorspace") or "")
+    required = _prompt_sources(prompt)
+    mapping: Dict[str, Any] = {}
+    route_ids: Dict[str, str] = {}
+    for candidate in napi.all_nodes():
+        for mode in ("image", "video"):
+            try:
+                if _selected_workflow_id(candidate, mode) != workflow_id:
+                    continue
+                source = _selected_workflow_input(candidate, mode)
+            except Exception:
+                continue
+            if not source:
+                continue
+            node_id = str(source.get("node_id") or "")
+            if node_id not in required:
+                raise ValueError(f"workflow input #{node_id or '?'} is not in the queued prompt")
+            inputs = required[node_id].get("inputs")
+            prompt_id = str(inputs.get("bridge_id") or "") if isinstance(inputs, dict) else ""
+            published_id = str(source.get("bridge_id") or "")
+            if not prompt_id or prompt_id != published_id:
+                raise ValueError(
+                    f"workflow input #{node_id} automatic Bridge ID is missing or stale; reload ComfyUI"
+                )
+            if prompt_id in route_ids and route_ids[prompt_id] != node_id:
+                raise ValueError(f"duplicate ComfyUI Bridge ID {prompt_id!r}")
+            if node_id in mapping:
+                raise ValueError(f"workflow input #{node_id} is mapped by more than one Nuke bridge")
+            route_ids[prompt_id] = node_id
+            mapping[node_id] = candidate
+    missing = [node_id for node_id in required if node_id not in mapping]
+    if missing:
+        raise ValueError(f"workflow inputs missing Nuke bridge mapping: {', '.join(missing)}")
+    return mapping
 
-    bridge_id = str(napi.knob_value(bridge_node, "bridge_id") or "")
-    host = _advertised_host(bridge_node)
-    port = int(napi.knob_value(bridge_node, "port") or 8765)
 
+def _patch_bridge_inputs(
+    inputs: Dict[str, Any], class_type: str, bridge_node: Any, route_id: str
+) -> None:
+    from . import napi
+
+    inputs["bridge_id"] = route_id
+    inputs["host"] = _advertised_host(bridge_node)
+    inputs["port"] = int(napi.knob_value(bridge_node, "port") or 8765)
+    if class_type in ("FromNuke", "ToNuke"):
+        fmt = str(napi.knob_value(bridge_node, "send_format") or "png8").strip().lower()
+        inputs["format"] = fmt if fmt in ("png8", "exr16") else "png8"
+        colorspace = str(napi.knob_value(bridge_node, "send_colorspace") or "")
+        inputs["colorspace"] = colorspace if class_type == "FromNuke" else ""
+        return
+    fmt = str(napi.knob_value(bridge_node, "video_format") or "mov").strip().lower()
+    codec = str(napi.knob_value(bridge_node, "video_mov_codec") or "prores_422hq").strip().lower()
+    inputs["format"] = fmt if fmt in ("mov", "mp4") else "mov"
+    inputs["mov_codec"] = codec if codec in ("prores_422hq", "prores_4444") else "prores_422hq"
+    colorspace = str(napi.knob_value(bridge_node, "video_colorspace") or "")
+    inputs["colorspace"] = colorspace if class_type == "FromNukeVideo" else ""
+
+
+def _output_route(
+    prompt: Dict[str, Any], node_id: str, class_type: str, mapping: Dict[str, Any]
+) -> tuple[Any, str]:
+    source_class = "FromNuke" if class_type == "ToNuke" else "FromNukeVideo"
+    source_ids = _upstream_source_ids(prompt, node_id, source_class)
+    if not source_ids:
+        raise ValueError(f"{class_type} #{node_id} has no upstream {source_class}")
+    missing = [source_id for source_id in source_ids if source_id not in mapping]
+    if missing:
+        raise ValueError(f"{class_type} #{node_id} has unmapped sources: {', '.join(missing)}")
+    targets = {id(mapping[source_id]): mapping[source_id] for source_id in source_ids}
+    route_ids = {
+        str(prompt[source_id].get("inputs", {}).get("bridge_id") or "")
+        for source_id in source_ids
+    }
+    route_ids.discard("")
+    if len(targets) != 1 or len(route_ids) != 1:
+        raise ValueError(f"{class_type} #{node_id} routes to multiple Nuke bridges")
+    return next(iter(targets.values())), next(iter(route_ids))
+
+
+def bridge_node_for_external_id(bridge_id: str) -> Any:
+    """Resolve a Comfy node's persistent ID through current Nuke dropdown mappings."""
+    from . import napi
+
+    matches: Dict[int, Any] = {}
+    for candidate in napi.all_nodes():
+        for mode in ("image", "video"):
+            try:
+                workflow = _selected_workflow(candidate, mode)
+                source = _selected_workflow_input(candidate, mode)
+            except Exception:
+                continue
+            if not workflow or not source:
+                continue
+            aliases = {str(source.get("bridge_id") or "")}
+            source_node_id = str(source.get("node_id") or "")
+            for output in workflow.get("to_nuke_nodes") or []:
+                if source_node_id in [str(value) for value in output.get("source_node_ids") or []]:
+                    aliases.add(str(output.get("bridge_id") or ""))
+            if bridge_id in aliases:
+                matches[id(candidate)] = candidate
+    if len(matches) > 1:
+        raise ValueError(f"ComfyUI Bridge ID {bridge_id!r} maps to more than one Nuke bridge")
+    return next(iter(matches.values())) if matches else None
+
+
+def _patch_nuke_bridge_prompt(
+    prompt: Any, bridge_node: Any, mapping: Optional[Dict[str, Any]] = None
+) -> Any:
+    """Patch mapped source/output routes and Nuke-side transport settings."""
     patched = copy.deepcopy(prompt)
-    for node in (patched or {}).values() if isinstance(patched, dict) else []:
+    for node_id, node in (patched or {}).items() if isinstance(patched, dict) else []:
         if not isinstance(node, dict):
             continue
-        class_type = node.get("class_type")
+        class_type = str(node.get("class_type") or "")
         if class_type not in ("FromNuke", "ToNuke", "FromNukeVideo", "ToNukeVideo"):
             continue
         inputs = node.get("inputs")
-        if isinstance(inputs, dict):
-            inputs["bridge_id"] = bridge_id
-            inputs["host"] = host
-            inputs["port"] = port
-            if class_type in ("FromNuke", "ToNuke"):
-                inputs["format"] = fmt
-                inputs["colorspace"] = colorspace if class_type == "FromNuke" else ""
-            else:
-                inputs["format"] = video_format
-                inputs["mov_codec"] = video_codec
-                inputs["colorspace"] = video_colorspace if class_type == "FromNukeVideo" else ""
+        if not isinstance(inputs, dict):
+            continue
+        target = bridge_node
+        route_id = str(inputs.get("bridge_id") or "")
+        if mapping is not None and class_type in ("FromNuke", "FromNukeVideo"):
+            target = mapping.get(str(node_id))
+            if target is None:
+                raise ValueError(f"workflow input #{node_id} has no Nuke bridge mapping")
+        elif mapping is not None:
+            target, route_id = _output_route(patched, str(node_id), class_type, mapping)
+        if not route_id:
+            raise ValueError(f"{class_type} #{node_id} has no automatic Bridge ID")
+        _patch_bridge_inputs(inputs, class_type, target, route_id)
     return patched

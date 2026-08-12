@@ -232,11 +232,15 @@ class _BridgeHandler(BaseHTTPRequestHandler):
     def _resolve_bridge_node(self, bridge_id: str) -> tuple[Any, str]:
         if bridge_id and bridge_id not in ("_active", "default"):
             node = napi.find_bridge_node(bridge_id)
+            if node is None:
+                from . import workflow_selection
+
+                node = workflow_selection.bridge_node_for_external_id(bridge_id)
         else:
             node = napi.find_default_bridge_node()
         if node is None:
             return None, bridge_id
-        resolved = napi.bridge_id_for_node(node) or bridge_id
+        resolved = bridge_id if bridge_id not in ("", "_active", "default") else napi.bridge_id_for_node(node)
         return node, resolved
 
     def _clean_colorspace(self, colorspace: Any) -> str:
@@ -333,14 +337,15 @@ class _BridgeHandler(BaseHTTPRequestHandler):
         ) or DEFAULT_SETTINGS["output_directory"]
 
         with _NUKE_LOCK:
-            node = None
-            create_read = False
             try:
                 node, _ = self._resolve_bridge_node(bridge_id)
-                if node is not None:
-                    create_read = bool(napi.knob_value(node, "create_read_on_result"))
-            except Exception:
-                pass
+                if node is None:
+                    _json_response(self, 404, {"ok": False, "error": f"bridge_id {bridge_id!r} not found"})
+                    return
+                create_read = bool(napi.knob_value(node, "create_read_on_result"))
+            except Exception as exc:
+                _json_response(self, 500, {"ok": False, "error": repr(exc)})
+                return
 
             try:
                 path = result.save_result(
@@ -375,10 +380,12 @@ class _BridgeHandler(BaseHTTPRequestHandler):
                 req_last = int(req.get("frame_end", -1))
                 node_first = int(napi.knob_value(node, "video_first") or napi.root_frame())
                 node_last = int(napi.knob_value(node, "video_last") or node_first)
-                first = req_first if req_first >= 0 else node_first
-                last = req_last if req_last >= 0 else node_last
-                if last < first:
-                    raise ValueError(f"invalid video frame range: {first}-{last}")
+                requested_first = req_first if req_first >= 0 else node_first
+                requested_last = req_last if req_last >= 0 else node_last
+                normalize_8n1 = bool(napi.knob_value(node, "video_normalize_8n1"))
+                first, last = video.normalized_frame_range(
+                    requested_first, requested_last, normalize_8n1
+                )
                 fps = float(req.get("fps") or napi.knob_value(node, "video_fps") or 24.0)
                 fmt = str(req.get("format") or napi.knob_value(node, "video_format") or "mov").lower()
                 mov_codec = str(req.get("mov_codec") or napi.knob_value(node, "video_mov_codec") or "prores_422hq").lower()
@@ -397,7 +404,16 @@ class _BridgeHandler(BaseHTTPRequestHandler):
         srv = get_server()
         base = srv.url() if srv else ""
         meta = dict(bundle["metadata"])
-        meta["prompt"] = prompt
+        meta.update({
+            "prompt": prompt,
+            "requested_frame_start": requested_first,
+            "requested_frame_end": requested_last,
+            "requested_frame_count": requested_last - requested_first + 1,
+            "effective_frame_start": first,
+            "effective_frame_end": last,
+            "effective_frame_count": last - first + 1,
+            "normalized_8n1": normalize_8n1,
+        })
         _json_response(self, 200, {
             "ok": True,
             "asset_id": asset_id,
@@ -469,14 +485,15 @@ class _BridgeHandler(BaseHTTPRequestHandler):
                 )
 
             with _NUKE_LOCK:
-                node = None
-                create_read = False
                 try:
                     node, _ = self._resolve_bridge_node(bridge_id)
-                    if node is not None:
-                        create_read = bool(napi.knob_value(node, "create_read_on_result"))
-                except Exception:
-                    pass
+                    if node is None:
+                        _json_response(self, 404, {"ok": False, "error": f"bridge_id {bridge_id!r} not found"})
+                        return
+                    create_read = bool(napi.knob_value(node, "create_read_on_result"))
+                except Exception as exc:
+                    _json_response(self, 500, {"ok": False, "error": repr(exc)})
+                    return
 
                 try:
                     path = video.save_video_result_file(

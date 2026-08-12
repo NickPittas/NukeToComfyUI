@@ -20,6 +20,18 @@ def clear_cache() -> None:
     _VIDEO_CACHE.clear()
 
 
+def normalized_frame_range(first: int, last: int, enabled: bool) -> tuple[int, int]:
+    first = int(first)
+    last = int(last)
+    if last < first:
+        raise ValueError(f"invalid video frame range: {first}-{last}")
+    if not enabled:
+        return first, last
+    count = last - first + 1
+    effective_count = ((count - 1 + 7) // 8) * 8 + 1
+    return first, first + effective_count - 1
+
+
 def _norm(value: str) -> str:
     return "".join(ch for ch in str(value).lower() if ch.isalnum())
 

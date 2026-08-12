@@ -12,6 +12,7 @@ import { app } from "/scripts/app.js";
 
 const FROM_NUKE_TYPES = ["FromNuke", "FromNukeVideo", "Nuke Bridge: From Nuke", "Nuke Bridge: From Nuke Video"];
 const TO_NUKE_TYPES = ["ToNuke", "ToNukeVideo", "Nuke Bridge: To Nuke", "Nuke Bridge: To Nuke Video"];
+const BRIDGE_TYPES = [...FROM_NUKE_TYPES, ...TO_NUKE_TYPES];
 const PUBLISH_DEBOUNCE_MS = 800;
 const POLL_MS = 3000;
 
@@ -69,6 +70,32 @@ function collectNodes() {
         try { return Object.values(nodes); } catch (_) { return []; }
     }
     return [];
+}
+
+function bridgeIdWidget(node) {
+    return safe(() => (node.widgets || []).find(w => w && w.name === "bridge_id"), null);
+}
+
+function newBridgeId() {
+    const uuid = safe(() => crypto.randomUUID().replaceAll("-", ""), null);
+    const token = uuid || (Date.now().toString(36) + Math.random().toString(36).slice(2));
+    return "bridge-" + token.slice(0, 16);
+}
+
+function ensureBridgeId(node) {
+    if (!nodeMatchesAnyType(node, BRIDGE_TYPES)) return;
+    queueMicrotask(() => {
+        const widget = bridgeIdWidget(node);
+        if (!widget) return;
+        const current = String(widget.value || "").trim();
+        const duplicate = current && collectNodes().some(other =>
+            other !== node && String(bridgeIdWidget(other)?.value || "").trim() === current
+        );
+        if (current && !duplicate) return;
+        widget.value = newBridgeId();
+        safe(() => node.graph.setDirtyCanvas(true, true), null);
+        debouncedPublish();
+    });
 }
 
 function workflowName() {
@@ -144,6 +171,9 @@ function wireGraphHooks() {
 
 app.registerExtension({
     name: "NukeBridge.WorkflowPublisher",
+    nodeCreated(node) {
+        ensureBridgeId(node);
+    },
     async setup() {
         // Graph may not be ready at setup; retry briefly.
         if (!wireGraphHooks()) {
