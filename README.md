@@ -1,251 +1,354 @@
 # Nuke ↔ ComfyUI Bridge
 
-A Nuke node (`ComfyUIBridge`) plus ComfyUI custom nodes (`FromNuke`, `ToNuke`)
-that let a ComfyUI workflow pull the current frame from a connected Nuke node
-and push a result image back.
+A Nuke `ComfyUIBridge` node and four ComfyUI nodes exchange images, masks,
+video, prompts, and returned results without moving workflow ownership into
+Nuke.
 
-See `PLAN.md` and `PROTOCOL.md` for the full architecture.
+- `FromNuke` pulls one image and mask from Nuke.
+- `ToNuke` returns one image to Nuke.
+- `FromNukeVideo` pulls a frame range and mask sequence from Nuke.
+- `ToNukeVideo` returns an image batch as MOV or MP4.
 
-## Status
+Nuke can trigger an open ComfyUI workflow, or the workflow can be queued
+normally in ComfyUI. Both directions use the same source mapping.
 
-**Phase 1 + Phase 2 transport.** PNG8 RGBA round trip is the default and has no
-extra dependencies. EXR16 half-float RGBA is available for higher-fidelity
-exchange. Explicit color controls (Phase 3) and discovery/robustness (Phase 4)
-are deferred — see `TASKS.md`.
+## Architecture
 
-All four mask modes are implemented in `/frame`:
-- `source alpha` / `invert source alpha`: handled by a small in-Nuke tree
-  (native EXR write for exr16).
-- `mask input` / `invert mask input`: source RGB is rendered in Nuke, then the
-  mask input's carrier alpha (alpha channel if it varies, else luma) is
-  composited in via a robust PIL fallback (exact Nuke Copy/Shuffle knob names
-  vary across versions and can't be tested here). Disconnected mask input falls
-  back to all-keep (carrier alpha = 1). See `nuke/comfyui_bridge/render.py`.
+```text
+Nuke graph                              ComfyUI workflow
+----------                              ----------------
+source image / optional mask
+          |
+ComfyUIBridge A  <--- HTTP ----------  FromNuke
+          |                              |
+          |                         processing nodes
+          |                              |
+          +-------- HTTP <-----------  ToNuke
 
-### EXR16 half-float transport (Phase 2)
+video source
+          |
+ComfyUIBridge B  <--- HTTP ----------  FromNukeVideo
+                                         |
+                                    processing nodes
+                                         |
+                    HTTP <-----------  ToNukeVideo
+```
 
-- Nuke → ComfyUI: set the bridge node's `send_format` knob (or the `FromNuke`
-  `format` input) to `exr16`. `/frame` writes a half-float RGBA EXR via a temp
-  Nuke Write node. Source-alpha modes are native EXR; **mask-input modes
-  currently degrade to PNG compose** (response `X-NukeBridge-Format: png8`)
-  because an in-Nuke Copy/Shuffle alpha-inject tree would depend on unverified
-  knob names. See `nuke/comfyui_bridge/render.py`.
-- ComfyUI → Nuke: set the `ToNuke` `format` input to `exr16`. The image is
-  encoded as half-float RGB EXR and saved with a `.exr` extension. The created
-  Nuke Read node leaves input transform/colorspace untouched; Nuke defaults or
-  project settings decide how it is interpreted.
-- **EXR on the ComfyUI side requires OpenImageIO** (`pip install OpenImageIO`
-  or your distro's `python3-openimageio`). EXR decode also works through an
-  OpenCV fallback built with OpenEXR support (read-only). If neither is
-  importable, FromNuke raises a clear `RuntimeError` telling you to install
-  OIIO or switch `format` to `png8`. EXR **encode** requires OpenImageIO.
-- HDR values are clamped to `[0,1]` before the diffusion-model tensor; raw
-  scene-referred values are not preserved through this layer yet.
+The `ComfyUIBridge` node is a passthrough in the Nuke graph. ComfyUI owns and
+executes the workflow. Nuke only serves connected media on demand, receives
+results, and optionally queues an already-published workflow.
 
-Returned Read nodes from `/result` are placed next to the originating
-`ComfyUIBridge` node (to the right) using `xpos`/`ypos` knobs, guarded in
-`try`.
+## Automatic bridge IDs
 
-Frame exports are cached in memory for 5 minutes, keyed by bridge id, frame,
-mask mode, colorspace, and connected source/mask node names. Re-running the same
-workflow on the same frame should not re-export from Nuke. Use **Clear frame
-cache** after changing the upstream Nuke graph if you need a fresh export for the
-same frame.
+Every `FromNuke`, `FromNukeVideo`, `ToNuke`, and `ToNukeVideo` node receives an
+automatic persistent `bridge-*` ID from the ComfyUI frontend extension.
 
-### Triggering ComfyUI workflows from Nuke
+- New nodes receive an ID when created.
+- Blank nodes from older saved workflows receive an ID when loaded.
+- A copied node with a duplicate ID receives a new ID.
+- Existing non-duplicate IDs remain unchanged.
+- Save an upgraded workflow once so generated IDs persist.
+- Manual ID entry is not required.
 
-The bridge node has a **workflow** dropdown plus **Refresh workflows** and
-**Run selected workflow** buttons. The dropdown lists ComfyUI browser
-workflows that are currently open and that contain at least one `FromNuke` or
-`ToNuke` node.
+These ComfyUI route IDs are separate from each Nuke `ComfyUIBridge` node's
+native `bridge_id`. Mapping never overwrites the Nuke ID.
 
-Limitations:
-- The ComfyUI tab with the workflow must be **open** with the frontend
-  extension loaded (`comfyui/nuke_bridge/web/nuke_bridge.js`). Closed tabs are
-  dropped from the list within ~60s.
-- The list is not live — click **Refresh workflows** in Nuke after opening or
-  editing a workflow in ComfyUI.
-- Only workflows containing `FromNuke` and/or `ToNuke` are listed.
-- If no workflows are visible (ComfyUI closed, extension not loaded, etc.),
-  use ComfyUI directly or save/reopen the workflow so the browser extension can
-  publish it. The old `workflow_api_path` runner is kept in code only as a
-  fallback helper, but new bridge nodes do not expose a second run button.
-- Nuke does **not** build or patch the workflow graph — it submits the API
-  prompt as-is. The workflow still pulls frames via `FromNuke` and returns via
-  `ToNuke`.
+## Workflow discovery and source mapping
 
-### Progress & cancellation
+Open ComfyUI browser tabs publish API prompts and routing metadata to Nuke.
+Closed tabs expire from the workflow list after about 60 seconds.
 
-When you click **Run selected workflow**, Nuke opens a
-`nuke.ProgressTask` and streams ComfyUI execution events over a stdlib
-websocket client connected to `ws://host:port/ws?clientId=...`. The status
-knob and the progress dialog update with the current node, `progress value/max`
-events, and the final outcome.
+On a Nuke `ComfyUIBridge` node:
 
-- If the websocket connection fails (older ComfyUI, firewall, etc.), the
-  bridge falls back to polling `GET /history/{prompt_id}` until the prompt
-  appears, with a spinner in the status knob. No `progress` granularity in
-  that mode.
-- Clicking **Cancel** on the `ProgressTask` stops *monitoring* and marks the
-  status `cancelled`. It does **not** remove the prompt from ComfyUI's queue —
-  the job keeps running server-side (cancelling the ComfyUI queue is deferred,
-  see `TASKS.md` Phase 4).
-- Run buttons start a background monitor thread so Nuke can still service
-  `FromNuke` frame requests while progress updates are marshalled back to the
-  main thread.
-- No new dependencies — the websocket client is stdlib `socket`/`ssl`; the
-  ComfyUI host/port come from the `comfyui_host`/`comfyui_port` knobs.
+1. Click **Refresh workflows**.
+2. Select the open ComfyUI workflow under **Image** or **Video**.
+3. Select the ComfyUI source node that this Nuke bridge should serve.
 
-## Install
+The source selectors are type-specific:
 
-### Recommended installer
+- **Image → FromNuke input** lists only `FromNuke` nodes.
+- **Video → FromNukeVideo input** lists only `FromNukeVideo` nodes.
+- Labels include the node title, automatic bridge ID, and ComfyUI graph ID.
 
-Use the stdlib TUI installer from the repo root:
+A workflow can map different source nodes to different Nuke bridge nodes. Each
+source must map to exactly one Nuke bridge. Missing, duplicate, stale, or
+ambiguous mappings fail before queueing and are reported in the Nuke node's
+Status and Logs.
+
+Mappings are held by the running Nuke process. After restarting Nuke, click
+**Refresh workflows** and confirm the source selections before queueing from
+either application.
+
+## Running workflows
+
+### Run from Nuke
+
+Select the workflow and source, then click **Run selected image workflow** or
+**Run selected video workflow**. Nuke:
+
+1. requests the selected tab's current API-format prompt;
+2. gathers every source mapping used by the workflow;
+3. validates automatic IDs and rejects missing or duplicate mappings;
+4. applies the mapped Nuke host, port, format, codec, and colorspace values to
+   the bridge nodes in the submitted prompt;
+5. queues the prompt on ComfyUI and follows its progress.
+
+ComfyUI source IDs remain stable. `ToNuke` and `ToNukeVideo` are routed through
+the sole matching upstream mapped media source.
+
+### Queue directly in ComfyUI
+
+The normal ComfyUI Queue button uses the same mapping:
+
+- `FromNuke*` sends its automatic source ID to Nuke.
+- Nuke resolves that ID to the selected `ComfyUIBridge` node.
+- `ToNuke*` sends its own automatic output ID.
+- Nuke resolves the output through its published upstream source metadata and
+  returns the result to the corresponding mapped bridge.
+
+An output with no mapped upstream source or more than one possible Nuke target
+is rejected instead of being saved or attached to the wrong node.
+
+## Image transport
+
+`FromNuke` requests a frame from the connected Nuke input. Nuke renders through
+a temporary Write node and returns PNG8 or EXR16 data. The node outputs:
+
+```text
+IMAGE, MASK, prompt, width, height
+```
+
+`ToNuke` encodes its image input, posts it to Nuke, saves it under the configured
+output directory, and optionally creates a Read node. Its IMAGE output remains
+a passthrough.
+
+### PNG8
+
+PNG8 is the default transport. Nuke explicitly chooses the outgoing colorspace
+and clamp behavior. The ComfyUI side decodes the bytes without applying a
+hidden transform.
+
+### EXR16
+
+EXR16 transports half-float RGB and float alpha. It requires OpenEXR support on
+the ComfyUI Python environment and a Nuke installation able to read/write EXR.
+If EXR support is unavailable, use PNG8.
+
+### Masks
+
+Nuke supports:
+
+```text
+source alpha
+invert source alpha
+mask input
+invert mask input
+```
+
+ComfyUI MASK uses `0 = keep` and `1 = masked`. The bridge converts Nuke alpha
+accordingly. A disconnected mask input produces an all-keep mask.
+
+## Video transport
+
+`FromNukeVideo` requests a Nuke frame range, downloads the main and mask video
+assets, and outputs an IMAGE batch, MASK batch, metadata, dimensions, frame
+count, FPS, and prompt. `ToNukeVideo` encodes an IMAGE batch and returns MOV or
+MP4 to Nuke. The returned video can create a Read node when enabled.
+
+Nuke performs source and mask rendering with native Write nodes. ComfyUI video
+decode/encode requires `ffmpeg` and `ffprobe`.
+
+### Optional 8n+1 normalization
+
+Enable **expand to 8n+1** on the Nuke Video tab when a downstream model requires
+frame counts of the form `8n+1`.
+
+- The requested first frame stays fixed.
+- The range expands only at the end.
+- An already-valid count is unchanged.
+- Disabled behavior is unchanged.
+
+Examples:
+
+```text
+1-80  (80 frames) -> 1-81 (81 frames)
+1-73  (73 frames) -> 1-73 (73 frames)
+```
+
+The Video tab shows requested and effective ranges. Returned metadata includes
+requested/effective start, end, count, and whether normalization was enabled.
+Video caching uses the effective range.
+
+## Progress and cancellation
+
+Nuke-run workflows listen to ComfyUI WebSocket progress events and update a
+Nuke `ProgressTask`. Cancellation sends ComfyUI `/interrupt` and marks the Nuke
+node cancelled. Image and video transfers also publish stage progress.
+
+## Installation
+
+### Installer
 
 ```bash
-python3 tools/install.py
+python install.py --nuke-home ~/.nuke --comfyui /path/to/ComfyUI
 ```
 
-Useful non-interactive checks:
-
-```bash
-python3 tools/install.py --dry-run --yes
-python3 tools/install.py --log install.log
-```
-
-The installer is intentionally conservative. It:
-
-- adds one marked `nuke.pluginAddPath(...)` block to your user `~/.nuke/init.py`
-  after making a backup;
-- links `comfyui/nuke_bridge` into ComfyUI `custom_nodes/` by symlink, and if
-  symlink creation fails it tells you and copies the custom node instead;
-- runs the existing OmniPaint backend installer (`tools/install_omnipaint_local.sh`)
-  and then validates the model/runtime state;
-- clones or accepts an existing Sammie-Roto install and runs Sammie's own
-  installer (`install.sh`, `install_dependencies.sh`, or the Windows `.bat`
-  equivalents), including Sammie's own model-download/skip prompts;
-- discovers LTX Desktop and its model directory only — it does not install,
-  build, download LTX models, or prepopulate LTX projects.
-
-Central settings live at:
+Useful options:
 
 ```text
-~/.nuke/comfyui_bridge/settings.json
+--repo PATH
+--no-nuke
+--no-comfy
+--dry-run
+--uninstall
+--skip-nuke-checks
+--install-deps
+--python PATH
+--keep-going
+--yes
+--enable-exr
 ```
 
-Environment overrides:
+The installer links the ComfyUI custom node, configures the Nuke plugin path,
+and can install optional Python dependencies.
 
-```text
-COMFYUI_ROOT
-SAMMIE_ROOT
-LTX_ROOT
-LTX_MODELS_DIR
-LTX_APP_DATA_DIR
-NUKE_HOME_DIR
-```
+### Manual Nuke installation
 
-From Nuke, use:
-
-```text
-Nuke > AI Setup > Health Check
-Nuke > AI Setup > Model Health
-Nuke > AI Setup > Open Settings
-Nuke > AI Launchers > Sammie-Roto (selected footage)
-Nuke > AI Launchers > LTX Desktop
-```
-
-`Model Health` checks OmniPaint/FLUX/NF4 state. Fast health may report NF4 as
-`partial` until the full import check is run from the installer menu item
-**Check OmniPaint models**.
-
-### Nuke side
-
-Add one plugin path entry to your user `~/.nuke/init.py`:
+User `~/.nuke/init.py` should contain only the plugin-path registration:
 
 ```python
-# ~/.nuke/init.py
-nuke.pluginAddPath("/home/npittas/.nuke/inpaint/nuke")
+nuke.pluginAddPath('/path/to/NukeToComfyUI/nuke')
 ```
 
-Do not paste plugin logic into user `init.py` or `menu.py`. Nuke will discover
-this repo's `nuke/init.py` and `nuke/menu.py` from the plugin path. The
-plugin's `nuke/init.py` also adds `nuke/nodes/` to pluginPath, so the
-`ComfyUIBridge.gizmo` is auto-discovered as a real node class. The bridge is
-created from the node graph Tab menu (or Tab-search `ComfyUIBridge`):
+The repository's `nuke/menu.py` registers **ComfyUI/ComfyUIBridge** in Nuke's
+Tab/Nodes menu. Do not copy node-registration code into the user `init.py`.
+
+### Manual ComfyUI installation
+
+Link or copy:
 
 ```text
-ComfyUI > ComfyUIBridge
+comfyui/nuke_bridge
 ```
 
-The node is a native gizmo, so Nuke attaches it to the currently selected node
-and places it in the graph like any other node — there is no Python-side
-attachment or positioning. On creation an `onCreate` callback fills the dynamic
-defaults: a generated `bridge_id`, and `host`/`port`/`output_directory` pulled
-from `~/.nuke/comfyui_bridge/settings.json`. The same callback creates the
-bridge knobs with Nuke's Python knob classes; the gizmo file stays a minimal
-Input/Output shell.
+into:
 
-Persistent settings live at `~/.nuke/comfyui_bridge/settings.json` with defaults
-`host=127.0.0.1`, `port=8765`, `output_directory=~/comfyui_bridge_results`.
-Use the bridge node's **Save defaults** button to persist edited host, port, and
-output directory. Restart the local bridge server after changing host/port.
-
-### ComfyUI side
-
-Copy (or symlink) the `comfyui/nuke_bridge` directory into ComfyUI's
-`custom_nodes/` directory:
-
-```bash
-ln -s /abs/path/to/inpaint/comfyui/nuke_bridge \
-      /path/to/ComfyUI/custom_nodes/nuke_bridge
+```text
+ComfyUI/custom_nodes/nuke_bridge
 ```
 
-Restart ComfyUI. You should see **Nuke Bridge: From Nuke** and
-**Nuke Bridge: To Nuke** in the node menu.
+Restart ComfyUI and confirm these nodes appear under **Nuke Bridge**:
 
-### Dependencies
-
-No new dependencies beyond what ComfyUI already ships:
-
-- Nuke side: standard library only.
-- ComfyUI side: `requests`, `Pillow`, `numpy`, `torch` (all standard in
-  ComfyUI).
-
-## Quick manual test
-
-1. Nuke: create `ComfyUIBridge`, connect a `Read`/`Constant` chain to input 0.
-2. ComfyUI: `FromNuke` → any image op → `ToNuke`. Leave `bridge_id` blank to
-   use the selected bridge in Nuke, or the only bridge if there is just one.
-3. Run the ComfyUI graph. Nuke should write a PNG into
-   `~/comfyui_bridge_results/` and (if `create_read_on_result` is on) create a
-   Read node for it.
-
-## Layout
-
+```text
+From Nuke
+To Nuke
+From Nuke Video
+To Nuke Video
 ```
+
+Keep only one active `nuke_bridge` custom-node installation. Duplicate copies
+can load stale Python or frontend code.
+
+## Network configuration
+
+Defaults:
+
+```text
+Nuke bridge listen address: 0.0.0.0:8765
+ComfyUI API:                127.0.0.1:8188
+```
+
+For same-machine use, ComfyUI can reach Nuke at `127.0.0.1`. For different
+machines:
+
+- leave Nuke **Listen on** at `0.0.0.0` if remote access is required;
+- set **Nuke host** to the hostname or IP ComfyUI can reach;
+- set **ComfyUI host/port** to the API address Nuke can reach;
+- allow both ports through the host firewall;
+- do not expose the unauthenticated bridge directly to the public internet.
+
+Changing the Nuke listener host or port requires restarting the bridge listener
+with **Save defaults** or restarting Nuke.
+
+## Troubleshooting
+
+### Run button reports a missing mapping
+
+Click **Refresh workflows**, reselect the workflow, and choose the required
+**FromNuke input** or **FromNukeVideo input**. The error includes the unmapped
+ComfyUI graph node ID.
+
+### Workflow list is empty
+
+Keep the workflow open in a ComfyUI browser tab, confirm it contains at least
+one bridge node, then click **Refresh workflows**. Reload ComfyUI if the frontend
+extension was installed while the server was running.
+
+### ComfyUI cannot pull from Nuke
+
+Check Nuke Status/Logs, the advertised **Nuke host**, port `8765`, firewall, and
+that only one active ComfyUI bridge plugin copy is installed.
+
+### Video transfer fails before decoding
+
+Confirm `ffmpeg` and `ffprobe` are on `PATH`, then check the Nuke log for Write
+format/codec errors.
+
+## Dependencies
+
+Core image operation:
+
+```text
+Nuke
+ComfyUI
+Python 3
+requests
+numpy
+Pillow
+PyTorch
+```
+
+EXR16 adds:
+
+```text
+OpenEXR
+Imath
+```
+
+Video adds:
+
+```text
+ffmpeg
+ffprobe
+```
+
+## Repository layout
+
+```text
 nuke/
-  init.py                     # path setup + onCreate callback registration
-  menu.py                     # Tab-menu command (native createNode)
-  nodes/
-    ComfyUIBridge.gizmo       # real Nuke gizmo: minimal Input/Output shell
+  init.py
+  menu.py
+  nodes/ComfyUIBridge.gizmo
   comfyui_bridge/
-    __init__.py
-    settings.py               # ~/.nuke/comfyui_bridge/settings.json
-    napi.py                   # main-thread isolation for all Nuke API access
-    node.py                   # knob spec + ensure_knobs/initialize_defaults + fallback
-    callbacks.py              # onCreate: ensure knobs + fill dynamic defaults
-    server.py                 # /health, /frame, /result HTTP server
-    render.py                 # temp-Write PNG/EXR render for /frame
-    result.py                 # save bytes + create Read node for /result
-    run_workflow.py           # legacy helper for saved API workflow submission
-    workflow_selection.py     # open-workflow dropdown + run-selected handler
-    comfy_progress.py         # stdlib websocket client + ProgressTask + history fallback
-comfyui/
-  nuke_bridge/
-    __init__.py               # NODE_CLASS_MAPPINGS / NODE_DISPLAY_NAME_MAPPINGS / WEB_DIRECTORY
-    nodes.py                  # FromNuke, ToNuke
-    image_io.py               # PNG bytes <-> ComfyUI tensors
-    workflow_registry.py      # /nuke_bridge/* routes + in-memory workflow list
-    web/
-      nuke_bridge.js          # frontend: publishes open workflows to backend
+    callbacks.py
+    napi.py
+    node.py
+    render.py
+    result.py
+    server.py
+    video.py
+    workflow_selection.py
+
+comfyui/nuke_bridge/
+  __init__.py
+  nodes.py
+  image_io.py
+  video_io.py
+  workflow_registry.py
+  web/nuke_bridge.js
+
+install.py
+PLAN.md
+PROTOCOL.md
+TASKS.md
 ```
