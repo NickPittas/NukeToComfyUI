@@ -27,11 +27,3 @@ try:
 except Exception:
     # Importing the package must never break Nuke startup.
     pass
-
-# Register the OmniPaintRemove onCreate callback (separate node, same lifecycle
-# rules). Idempotent; no-op outside Nuke.
-try:
-    from omnipaint_remove import callbacks as _opr_cb
-    _opr_cb.register()
-except Exception:
-    pass

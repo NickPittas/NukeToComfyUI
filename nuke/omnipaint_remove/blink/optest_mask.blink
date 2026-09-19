@@ -1,9 +1,0 @@
-kernel OPTestMask : ImageComputationKernel<ePixelWise>
-{
-  Image<eWrite> dst;
-  void process(int2 pos) {
-    int inside = (pos.x >= 430 && pos.x < 590 && pos.y >= 360 && pos.y < 520) ? 1 : 0;
-    float v = inside ? 1.0f : 0.0f;
-    dst() = float4(v, v, v, v);
-  }
-};

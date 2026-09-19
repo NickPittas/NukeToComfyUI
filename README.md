@@ -187,30 +187,44 @@ node cancelled. Image and video transfers also publish stage progress.
 
 ## Installation
 
-### Installer
+### Bridge-only installer
+
+Use Python 3.10+ on Windows, macOS, or Linux, with Nuke and ComfyUI already
+installed. From this repository's root:
 
 ```bash
-python install.py --nuke-home ~/.nuke --comfyui /path/to/ComfyUI
+python tools/install.py
 ```
 
-Useful options:
+1. Choose **Configure ComfyUI path**. Select the engine folder containing
+   `main.py` and `comfy/` (the inner `ComfyUI` folder for portable installs).
+2. Choose **Save settings** to retain the path between installer runs.
+3. Optionally preview installation without changing the target files:
+   `python tools/install.py --dry-run --yes`.
+4. Choose **Run all** in the menu, or run `python tools/install.py --yes`.
+5. Restart Nuke and ComfyUI to load the plugin changes.
 
-```text
---repo PATH
---no-nuke
---no-comfy
---dry-run
---uninstall
---skip-nuke-checks
---install-deps
---python PATH
---keep-going
---yes
---enable-exr
-```
+The interface is a numbered terminal menu with an optional external Tk folder
+picker, not a full-screen TUI. **If Tk is missing or a dialog cannot open,
+type or paste the ComfyUI folder path instead.** Tk is optional; the installer
+shows OS-specific installation instructions but does not install OS packages.
 
-The installer links the ComfyUI custom node, configures the Nuke plugin path,
-and can install optional Python dependencies.
+The installer backs up and updates Nuke's `init.py`, links the ComfyUI custom
+node (or copies it when symlinks are unavailable), and saves bridge settings.
+It does not install Nuke, ComfyUI, models, or Python dependencies. For a
+Nuke-only setup connecting to remote ComfyUI, use **Install Nuke plugin**
+instead of **Run all**, and install the ComfyUI custom node on the other machine.
+
+Supported options are `--dry-run`, `--yes`, and `--log PATH` (plus `--help`).
+`COMFYUI_ROOT` overrides the saved ComfyUI path; `NUKE_HOME_DIR` overrides
+`~/.nuke`. An unset or invalid ComfyUI root makes a noninteractive full install
+or preview exit nonzero rather than silently skipping the ComfyUI side.
+
+See [Installer and settings](docs/INSTALLER.md) for path selection, Tk setup,
+logging, exit codes, and upgrade details.
+
+OmniPaint, Sammie-Roto, and LTX Desktop integrations have been removed. This
+repository installs only the Nuke ↔ ComfyUI bridge.
 
 ### Manual Nuke installation
 
@@ -254,14 +268,14 @@ can load stale Python or frontend code.
 Defaults:
 
 ```text
-Nuke bridge listen address: 0.0.0.0:8765
+Nuke bridge listen address: 127.0.0.1:8765
 ComfyUI API:                127.0.0.1:8188
 ```
 
 For same-machine use, ComfyUI can reach Nuke at `127.0.0.1`. For different
 machines:
 
-- leave Nuke **Listen on** at `0.0.0.0` if remote access is required;
+- change Nuke **Listen on** to a reachable interface, or `0.0.0.0` to bind all IPv4 interfaces;
 - set **Nuke host** to the hostname or IP ComfyUI can reach;
 - set **ComfyUI host/port** to the API address Nuke can reach;
 - allow both ports through the host firewall;
@@ -295,6 +309,10 @@ Confirm `ffmpeg` and `ffprobe` are on `PATH`, then check the Nuke log for Write
 format/codec errors.
 
 ## Dependencies
+
+The standalone installer uses the Python standard library. Tk is optional for
+folder browsing; typed paths work without it. The following runtime libraries
+belong in the ComfyUI Python environment, not Nuke's embedded Python.
 
 Core image operation:
 
@@ -347,7 +365,8 @@ comfyui/nuke_bridge/
   workflow_registry.py
   web/nuke_bridge.js
 
-install.py
+tools/install.py
+docs/INSTALLER.md
 PLAN.md
 PROTOCOL.md
 TASKS.md
